@@ -15,6 +15,17 @@
 
 .sample-tag, .sample-tag-sm { background: #ffb200; color: #1a1a1a; padding: 1px 6px; border-radius: 3px; font-size: 0.7rem; font-weight: bold; margin-left: 6px; }
 
+.rank-cell { font-weight: bold; text-align: center; }
+.status-canceled { background: #6b6b6b; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 0.75rem; }
+.row-canceled { opacity: 0.55; }
+.row-canceled:hover { opacity: 0.8; }
+
+.estimates-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 0.85rem; margin: 8px 0; }
+.ranking-badge { display: inline-block; font-size: 1.3rem; font-weight: bold; background: #2b5aed; color: #fff; padding: 4px 12px; border-radius: 6px; margin-bottom: 8px; }
+.market-condition-tag { padding: 1px 8px; border-radius: 3px; font-size: 0.75rem; font-weight: bold; }
+.market-condition-tag.seller_market { background: #d7f0d7; color: #1a5c1a; }
+.market-condition-tag.buyer_market { background: #d7e6f0; color: #1a3f5c; }
+
 .warning-banner { background: #ffe0e0; border: 2px solid #d80000; color: #7a0000; padding: 6px 8px; border-radius: 4px; margin: 6px 0; font-weight: bold; font-size: 0.8rem; }
 .warning-banner.compact { padding: 2px 4px; font-size: 0.7rem; }
 .warning-line { margin: 2px 0; }

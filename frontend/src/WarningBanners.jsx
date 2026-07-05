@@ -2,23 +2,19 @@ import React from "react";
 
 // Loud, unmissable warnings for risk factors. Rendered inline in table rows
 // (compact) or in the detail view (full).
+//
+// The backend (scoring.compute_score) already generates these warning
+// strings server-side and returns them as property.warnings, with fuller
+// context than this component used to reconstruct client-side (e.g. the
+// specific reason for a lien-priority flag). The old version also read a
+// `property.score` shape that doesn't exist in the real API response
+// (fields like equity_spread/warnings are top-level, not nested under
+// `score`) for one now-dead condition - harmless since the equivalent
+// plaintiff_type check already covered it, but worth cleaning up while
+// switching to the backend's warnings array as the single source of truth.
 export default function WarningBanners({ property, compact = false }) {
   if (!property) return null;
-  const score = property.score || {};
-  const warnings = [];
-
-  if (property.plaintiff_type === "HOA-COA" || score.junior_lien_warning) {
-    warnings.push("JUNIOR LIEN / HOA-COA FORECLOSURE — buyer may take subject to a surviving senior mortgage.");
-  }
-  if (property.senior_lien_survives === true) {
-    warnings.push("SENIOR LIEN SURVIVES — buyer inherits this debt; equity spread may be largely wiped out.");
-  }
-  if (property.flood_zone) {
-    warnings.push(`FLOOD ZONE: ${property.flood_zone} — verify flood insurance requirements/cost.`);
-  }
-  if (property.bankruptcy_flag) {
-    warnings.push("ACTIVE/RECENT BANKRUPTCY FLAG — sale may be stayed or complicated.");
-  }
+  const warnings = property.warnings || [];
 
   if (warnings.length === 0) return null;
 

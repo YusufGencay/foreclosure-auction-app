@@ -56,8 +56,25 @@ export async function scrapeAll() {
   return handle(res);
 }
 
+// NOTE: the real endpoint is /api/scrape-status (hyphen), not /api/scrape/status -
+// this was previously wrong and silently broke the Counties tab.
 export async function getScrapeStatus() {
-  const res = await fetch(`${BASE_URL}/api/scrape/status`);
+  const res = await fetch(`${BASE_URL}/api/scrape-status`);
+  return handle(res);
+}
+
+// Full county config/status (platform, portal_url, verified, etc.) - the
+// Counties tab needs this, not just the status endpoint above.
+export async function getCounties() {
+  const res = await fetch(`${BASE_URL}/api/counties`);
+  return handle(res);
+}
+
+// Phase 1: on-demand Zillow/Realtor.com/Redfin estimates + market
+// conditions for one property. Can take 1-2 minutes on a cold cache since
+// it drives real headless-browser scrapes server-side.
+export async function enrichProperty(id) {
+  const res = await fetch(`${BASE_URL}/api/properties/${id}/enrich`);
   return handle(res);
 }
 

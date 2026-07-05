@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import WarningBanners from "./WarningBanners.jsx";
-import { getProperty, updateProperty, runTitleSearch } from "./api.js";
+import { getProperty, updateProperty, runTitleSearch, enrichProperty } from "./api.js";
 
 export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
   const [property, setProperty] = useState(null);
@@ -9,6 +9,8 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
   const [titleResult, setTitleResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichNote, setEnrichNote] = useState(null);
 
   useEffect(() => {
     if (!propertyId) return;
@@ -63,11 +65,44 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
     }
   }
 
+  async function handleEnrich() {
+    setEnriching(true);
+    setEnrichNote(null);
+    try {
+      // Real Zillow/Realtor.com/Redfin scrapes - this can take up to a
+      // couple of minutes on a cold cache (each of the 3 sites gets a real
+      // 30s-max headless-browser attempt), so this button intentionally
+      // blocks with a "Refreshing..." state rather than looking broken.
+      const updated = await enrichProperty(property.id);
+      setProperty(updated);
+      if (updated.enrich_cached) {
+        setEnrichNote("Estimates were already refreshed within the last 24h - showing cached values.");
+      } else if (updated.enrich_errors && updated.enrich_errors.length > 0) {
+        setEnrichNote(`Refreshed with some errors: ${updated.enrich_errors.join("; ")}`);
+      } else {
+        setEnrichNote("Estimates refreshed.");
+      }
+      if (onUpdated) onUpdated();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}>×</button>
-        <h2>{property.address || "(no address)"} {property.is_sample_data && <span className="sample-tag">SAMPLE DATA</span>}</h2>
+        <h2>{property.address || "(no address)"} {property.is_demo_data && <span className="sample-tag">DEMO DATA - NOT REAL</span>}</h2>
+
+        <div className="ranking-badge">
+          Ranking score: {property.ranking_score != null ? property.ranking_score.toFixed(1) : "—"} / 100
+        </div>
+        {property.auction_status === "canceled" && (
+          <div className="warning-banner">⚠ This auction no longer appears in the county's source calendar - it may have been canceled, postponed, or satisfied. Verify before bidding.</div>
+        )}
+
         <WarningBanners property={property} />
 
         <div className="detail-grid">
@@ -96,11 +131,36 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           <div><strong>Redemption notes:</strong> {property.redemption_notes || "—"}</div>
           <div><strong>Legal description:</strong> {property.legal_description || "—"}</div>
           <div><strong>Last scraped at:</strong> {property.last_scraped_at || "never (no live scrape yet)"}</div>
+          <div><strong>Auction status:</strong> {property.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (property.auction_status || "—")}</div>
           <div><strong>Source URL:</strong> {property.source_url ? <a href={property.source_url} target="_blank" rel="noreferrer">{property.source_url}</a> : "—"}</div>
         </div>
 
+        <h3>Third-party estimates &amp; market conditions</h3>
+        <div className="estimates-grid">
+          <div><strong>Zillow estimate:</strong> {property.zillow_estimate != null ? `$${Math.round(property.zillow_estimate).toLocaleString()}` : "unavailable"}</div>
+          <div><strong>Realtor.com estimate:</strong> {property.realtor_estimate != null ? `$${Math.round(property.realtor_estimate).toLocaleString()}` : "unavailable"}</div>
+          <div><strong>Redfin estimate:</strong> {property.redfin_estimate != null ? `$${Math.round(property.redfin_estimate).toLocaleString()}` : "unavailable"}</div>
+          <div>
+            <strong>Market conditions:</strong>{" "}
+            {property.market_conditions ? (
+              <span className={`market-condition-tag ${property.market_conditions}`}>{property.market_conditions.replace("_", " ")}</span>
+            ) : "unavailable"}
+          </div>
+          <div><strong>Estimates last updated:</strong> {property.estimates_last_updated || "never"}</div>
+        </div>
+        <div className="action-row">
+          <button onClick={handleEnrich} disabled={enriching}>
+            {enriching ? "Refreshing estimates (can take ~1-2 min)..." : "Refresh Estimates"}
+          </button>
+        </div>
+        {enrichNote && <div className="title-result">{enrichNote}</div>}
+        <p style={{ fontSize: "0.75rem", color: "#666" }}>
+          Zillow/Realtor.com/Redfin actively block automated browsers, so these can come back "unavailable" even
+          after a refresh - this tool never fabricates a number when a site can't be read. Cached for 24h once fetched.
+        </p>
+
         <h3>Score breakdown</h3>
-        <pre className="score-block">{JSON.stringify(property.score, null, 2)}</pre>
+        <pre className="score-block">{JSON.stringify(property.component_breakdown, null, 2)}</pre>
 
         <div className="link-row">
           <a href={zillowUrl} target="_blank" rel="noreferrer">View on Zillow →</a>

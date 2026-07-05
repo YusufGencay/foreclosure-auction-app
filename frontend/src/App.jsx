@@ -21,8 +21,12 @@ export default function App() {
     county: "", plaintiff_type: "", occupancy_status: "", flag_status: "",
     min_equity_spread: "",
   });
-  const [sortBy, setSortBy] = useState("id");
-  const [sortDir, setSortDir] = useState("asc");
+  // Ranking drives the whole dashboard (Phase 2) - default to the same
+  // sort the backend itself defaults to (ranking_score DESC) rather than
+  // an arbitrary "id" that made the highest-ranked deals invisible unless
+  // you manually re-sorted.
+  const [sortBy, setSortBy] = useState("ranking_score");
+  const [sortDir, setSortDir] = useState("desc");
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
   const [data, setData] = useState({ results: [], total: 0 });
@@ -38,12 +42,17 @@ export default function App() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Numeric "bigger is better" columns should default to descending on
+  // first click (best deals/highest rank first), everything else to
+  // ascending (e.g. soonest sale date first).
+  const DESC_FIRST_COLUMNS = new Set(["ranking_score", "equity_spread"]);
+
   function handleSort(col) {
     if (sortBy === col) {
       setSortDir(sortDir === "asc" ? "desc" : "asc");
     } else {
       setSortBy(col);
-      setSortDir("asc");
+      setSortDir(DESC_FIRST_COLUMNS.has(col) ? "desc" : "asc");
     }
   }
 
@@ -109,26 +118,28 @@ export default function App() {
             <table className="properties-table">
               <thead>
                 <tr>
+                  <th onClick={() => handleSort("ranking_score")}>Rank {sortBy === "ranking_score" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("county")}>County {sortBy === "county" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("sale_date")}>Sale Date {sortBy === "sale_date" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th>Address</th>
                   <th onClick={() => handleSort("equity_spread")}>Equity Spread {sortBy === "equity_spread" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("plaintiff_type")}>Plaintiff Type {sortBy === "plaintiff_type" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("occupancy_status")}>Occupancy {sortBy === "occupancy_status" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                  <th onClick={() => handleSort("score")}>Score {sortBy === "score" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th>Auction Status</th>
                   <th>Flags</th>
                 </tr>
               </thead>
               <tbody>
                 {data.results.map((p) => (
-                  <tr key={p.id} onClick={() => setSelectedId(p.id)} className="clickable-row">
-                    <td>{p.county} {p.is_sample_data && <span className="sample-tag-sm">SAMPLE</span>}</td>
+                  <tr key={p.id} onClick={() => setSelectedId(p.id)} className={`clickable-row${p.auction_status === "canceled" ? " row-canceled" : ""}`}>
+                    <td className="rank-cell">{p.ranking_score != null ? p.ranking_score.toFixed(1) : "—"}</td>
+                    <td>{p.county} {p.is_demo_data && <span className="sample-tag-sm">DEMO</span>}</td>
                     <td>{p.sale_date ? new Date(p.sale_date).toLocaleDateString() : "—"}</td>
                     <td>{p.address || "—"}</td>
-                    <td>{p.score?.equity_spread != null ? `$${Math.round(p.score.equity_spread).toLocaleString()}` : "—"}</td>
+                    <td>{p.equity_spread != null ? `$${Math.round(p.equity_spread).toLocaleString()}` : "—"}</td>
                     <td>{p.plaintiff_type || "—"}</td>
                     <td>{p.occupancy_status || "—"}</td>
-                    <td>{p.score?.total_score != null ? p.score.total_score.toFixed(1) : "—"}</td>
+                    <td>{p.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (p.auction_status || "—")}</td>
                     <td><WarningBanners property={p} compact /></td>
                   </tr>
                 ))}
@@ -137,15 +148,16 @@ export default function App() {
           ) : (
             <div className="card-view">
               {data.results.slice(cardIndex, cardIndex + 2).map((p) => (
-                <div key={p.id} className="property-card" onClick={() => setSelectedId(p.id)}>
-                  <h3>{p.address} {p.is_sample_data && <span className="sample-tag-sm">SAMPLE</span>}</h3>
+                <div key={p.id} className={`property-card${p.auction_status === "canceled" ? " row-canceled" : ""}`} onClick={() => setSelectedId(p.id)}>
+                  <h3>{p.address} {p.is_demo_data && <span className="sample-tag-sm">DEMO</span>}</h3>
                   <WarningBanners property={p} />
+                  <div>Ranking score: <strong>{p.ranking_score != null ? p.ranking_score.toFixed(1) : "—"}</strong> / 100</div>
                   <div>County: {p.county}</div>
                   <div>Sale date: {p.sale_date ? new Date(p.sale_date).toLocaleDateString() : "—"}</div>
-                  <div>Equity spread: {p.score?.equity_spread != null ? `$${Math.round(p.score.equity_spread).toLocaleString()}` : "—"}</div>
+                  <div>Equity spread: {p.equity_spread != null ? `$${Math.round(p.equity_spread).toLocaleString()}` : "—"}</div>
                   <div>Plaintiff type: {p.plaintiff_type || "—"}</div>
                   <div>Occupancy: {p.occupancy_status || "—"}</div>
-                  <div>Score: {p.score?.total_score != null ? p.score.total_score.toFixed(1) : "—"}</div>
+                  <div>Auction status: {p.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (p.auction_status || "—")}</div>
                 </div>
               ))}
               <div className="card-nav">

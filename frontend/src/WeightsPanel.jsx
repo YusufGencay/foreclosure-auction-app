@@ -7,7 +7,10 @@ export default function WeightsPanel() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    getWeights().then((d) => setWeights(d.weights)).catch((e) => setError(e.message));
+    // GET /api/weights returns a plain list directly, not {weights: [...]} -
+    // the old code set state to undefined here, which would crash this
+    // whole tab the moment it tried to render weights.map(...).
+    getWeights().then(setWeights).catch((e) => setError(e.message));
   }, []);
 
   function handleChange(key, value) {
@@ -17,10 +20,13 @@ export default function WeightsPanel() {
   async function handleSave() {
     setSaving(true);
     try {
-      const payload = {};
-      weights.forEach((w) => { payload[w.key] = parseFloat(w.weight); });
+      // PUT /api/weights expects {"weights": [{"key": ..., "weight": ...}, ...]} -
+      // the old code sent {"weights": {equity_spread: 1.0, ...}} (a flat
+      // dict, not a list of {key, weight} objects), which the backend's
+      // Pydantic model would reject with a 422 on every save attempt.
+      const payload = weights.map((w) => ({ key: w.key, weight: parseFloat(w.weight) }));
       const result = await putWeights(payload);
-      setWeights(result.weights);
+      setWeights(result);
     } catch (e) {
       setError(e.message);
     } finally {

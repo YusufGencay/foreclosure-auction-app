@@ -1,15 +1,20 @@
 import React, { useEffect, useState } from "react";
-import { getScrapeStatus, scrapeCounty, scrapeAll } from "./api.js";
+import { getCounties, scrapeCounty, scrapeAll } from "./api.js";
 
 export default function CountyPanel() {
   const [counties, setCounties] = useState([]);
   const [loadingCounty, setLoadingCounty] = useState(null);
   const [error, setError] = useState(null);
 
+  // NOTE: this used to call getScrapeStatus() (GET /api/scrape-status),
+  // which only returns {county, last_scraped_at, last_scrape_success,
+  // last_scrape_error} - it never had .region/.platform/.confirmed/
+  // .portal_url, so most of this table silently rendered blank. GET
+  // /api/counties has the full config this panel actually needs.
   async function refresh() {
     try {
-      const data = await getScrapeStatus();
-      setCounties(data.counties || []);
+      const data = await getCounties();
+      setCounties(data || []);
     } catch (e) {
       setError(e.message);
     }
@@ -64,22 +69,22 @@ export default function CountyPanel() {
         </thead>
         <tbody>
           {counties.map((c) => (
-            <tr key={c.county}>
-              <td>{c.county} <span className="region-tag">{c.region}</span></td>
+            <tr key={c.name}>
+              <td>{c.name} <span className="region-tag">{c.region}</span></td>
               <td>{c.platform}</td>
-              <td>{c.confirmed ? "yes" : "no"}</td>
+              <td>{c.verified ? "yes" : "no"}</td>
               <td>
                 {c.last_scrape_success ? c.last_scraped_at : "never"}
               </td>
               <td>
                 {c.last_scraped_at
-                  ? (c.last_scrape_success ? "success" : `failed: ${c.error_message || ""}`)
+                  ? (c.last_scrape_success ? "success" : `failed: ${c.last_scrape_error || ""}`)
                   : "never attempted"}
               </td>
               <td><a href={c.portal_url} target="_blank" rel="noreferrer">portal ↗</a></td>
               <td>
-                <button onClick={() => handleScrape(c.county)} disabled={loadingCounty === c.county}>
-                  {loadingCounty === c.county ? "..." : "Refresh"}
+                <button onClick={() => handleScrape(c.name)} disabled={loadingCounty === c.name}>
+                  {loadingCounty === c.name ? "..." : "Refresh"}
                 </button>
               </td>
             </tr>
