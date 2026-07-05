@@ -1,0 +1,106 @@
+# Florida Foreclosure Auction Portal Configuration
+# Verified via WebSearch/WebFetch on 2026-07-03. All 14 URLs resolved live and
+# were cross-checked against official county clerk websites. Most RealAuction
+# (realforeclose.com / realtaxdeed.com) pages are JS single-page apps, so a
+# plain HTTP fetch confirms the domain/site is live and correctly identified,
+# but does not render the auction calendar itself (see backend/scrapers notes).
+# platform values: realforeclose | realtaxdeed | grantstreet_clerkauction | other | unknown
+
+counties:
+  - county: Hillsborough
+    region: Tampa Bay
+    platform: realforeclose
+    portal_url: https://hillsborough.realforeclose.com
+    verified: true
+    notes: "Confirmed live (RealAuction). JS SPA, minimal static HTML. Official per hillsclerk.com."
+
+  - county: Pinellas
+    region: Tampa Bay
+    platform: realtaxdeed
+    portal_url: https://pinellas.realtaxdeed.com
+    verified: true
+    notes: "Confirmed live. County also runs pinellas.realforeclose.com for mortgage foreclosures; both official per mypinellasclerk.gov. JS SPA."
+
+  - county: Pasco
+    region: Tampa Bay
+    platform: realforeclose
+    portal_url: https://pasco.realforeclose.com
+    verified: true
+    notes: "Confirmed live, official per pascoclerk.com. Tax deed sales likely on pasco.realtaxdeed.com (not independently fetched)."
+
+  - county: Hernando
+    region: Tampa Bay
+    platform: realtaxdeed
+    portal_url: https://hernando.realtaxdeed.com
+    verified: true
+    notes: "Confirmed live, official per hernandoclerk.com. Foreclosure sales are in-person at courthouse; tax deed portal is primary online system."
+
+  - county: Manatee
+    region: Tampa Bay
+    platform: realforeclose
+    portal_url: https://manatee.realforeclose.com
+    verified: true
+    notes: "Confirmed live, official per manateeclerk.com; used for both foreclosure and tax deed calendars."
+
+  - county: Sarasota
+    region: Tampa Bay
+    platform: realforeclose
+    portal_url: https://sarasota.realforeclose.com
+    verified: true
+    notes: "Confirmed live, official per sarasotaclerk.com. sarasota.realtaxdeed.com likely exists for tax deeds (not independently fetched)."
+
+  - county: Orange
+    region: Central FL
+    platform: realforeclose
+    portal_url: https://orange.realforeclose.com
+    verified: true
+    notes: "Confirmed live, exclusive foreclosure platform per myorangeclerk.com. Tax deeds handled separately via occompt.com, not on RealAuction."
+
+  - county: Osceola
+    region: Central FL
+    platform: realtaxdeed
+    portal_url: https://osceola.realtaxdeed.com
+    verified: true
+    notes: "Confirmed live, official per osceolaclerk.com for tax deed sales. RE-CONFIRMED 2026-07-05: osceola.realforeclose.com calendar returns 'This feature is currently offline' - Osceola does not run mortgage foreclosure sales through RealAuction. Per user (real estate investor, direct knowledge): Lake and Osceola are the only 2 of the 14 counties that don't run their foreclosure process via RealAuction."
+
+  - county: Seminole
+    region: Central FL
+    platform: realforeclose
+    portal_url: https://seminole.realforeclose.com
+    verified: true
+    notes: "CORRECTED 2026-07-05 (was wrongly marked as a custom webapps.seminoleclerk.org system - that was never actually verified live, only guessed from search). Confirmed live via real browser session: seminole.realforeclose.com is a fully active RealAuction foreclosure calendar with real scheduled sales (e.g. 9/11 FC on 07/23/2026). Uses the same realauction_playwright.py adapter as the other counties."
+
+  - county: Polk
+    region: Central FL
+    platform: realforeclose
+    portal_url: https://polk.realforeclose.com
+    verified: true
+    notes: "Confirmed live, official per polkclerkfl.gov. Tax deed records on separate custom system (apps.polkcountyclerk.net/browserviewtd), not RealAuction."
+
+  - county: Lake
+    region: Central FL
+    platform: realtaxdeed
+    portal_url: https://lake.realtaxdeed.com
+    verified: true
+    notes: "CORRECTED 2026-07-05: lake.realforeclose.com exists but its calendar returns 'This feature is currently offline' - Lake does NOT run mortgage foreclosure sales through RealAuction (verified live). lake.realtaxdeed.com IS live and active with real scheduled tax deed sales (e.g. 10/11 TD on 07/21/2026) - that's the correct portal for this county. Per user (real estate investor, direct knowledge): Lake and Osceola are the only 2 of the 14 counties that don't run their foreclosure process via RealAuction."
+
+  - county: Volusia
+    region: Central FL
+    platform: realforeclose
+    portal_url: https://volusia.realforeclose.com
+    verified: true
+    notes: "Confirmed live (strong response signal on fetch). clerk.org confirms realforeclose (foreclosure) and separate volusia.realtaxdeed.com (tax deed)."
+
+  - county: Brevard
+    region: Central FL
+    platform: realforeclose
+    portal_url: https://brevard.realforeclose.com
+    verified: true
+    notes: "Confirmed live, official per brevardclerk.us; used primarily for tax deed sales (mortgage foreclosure auctions are in-person, Wednesdays, Brevard Room)."
+
+  - county: Marion
+    region: Central FL
+    platform: realforeclose
+    portal_url: https://marion.realforeclose.com
+    verified: true
+    notes: "Confirmed live, official per marioncountyclerk.org; marion.realtaxdeed.com also exists as official RealAuction platform for tax deeds."
