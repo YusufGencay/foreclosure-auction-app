@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from db import Base, engine, get_db, SessionLocal, ensure_columns
-from models import County, Property, ScrapeLog, ScoreWeight
+from models import County, Property, ScrapeLog, ScoreWeight, Watchlist, BidRecord
 from config import load_counties_config, TITLE_SEARCH_API_KEY, TITLE_SEARCH_PROVIDER
 from scrapers.sample_data import seed_sample_data
 from scrapers.base import run_scraper_safely, ScrapeResult
@@ -204,6 +204,10 @@ class PropertyUpdate(BaseModel):
     rehab_estimate_user_input: Optional[float] = None
 
 
+class NotesUpdate(BaseModel):
+    investor_notes: str
+
+
 class WeightUpdateItem(BaseModel):
     key: str
     weight: float
@@ -213,9 +217,25 @@ class WeightsUpdate(BaseModel):
     weights: List[WeightUpdateItem]
 
 
+class BidRecordCreate(BaseModel):
+    property_id: int
+    bid_amount: Optional[float] = None
+    sale_price: Optional[float] = None
+    winner: Optional[str] = None
+    notes: Optional[str] = None
+
+
+def _watchlisted_ids(db: Session) -> set:
+    return {w.property_id for w in db.query(Watchlist.property_id).all()}
+
+
 def _property_to_dict(prop: Property, db: Session) -> dict:
     weights = _get_weights_dict(db)
     score = compute_score(prop, weights)
+    is_watchlisted = db.query(Watchlist).filter(Watchlist.property_id == prop.id).first() is not None
+    days_to_auction = None
+    if prop.sale_date:
+        days_to_auction = (prop.sale_date.date() - datetime.utcnow().date()).days
     return {
         "id": prop.id,
         "case_number": prop.case_number,
@@ -249,6 +269,7 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "hoa_balance": prop.hoa_balance,
         "rehab_estimate_user_input": prop.rehab_estimate_user_input,
         "notes": prop.notes,
+        "investor_notes": prop.investor_notes,
         "flag_status": prop.flag_status,
         "source_url": prop.source_url,
         "is_demo_data": prop.is_demo_data,
@@ -264,6 +285,8 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "redfin_estimate": prop.redfin_estimate,
         "market_conditions": prop.market_conditions,
         "estimates_last_updated": prop.estimates_last_updated,
+        "is_watchlisted": is_watchlisted,
+        "days_to_auction": days_to_auction,
     }
 
 
@@ -275,11 +298,14 @@ def list_properties(
     county: Optional[str] = None,
     sale_date_from: Optional[date] = None,
     sale_date_to: Optional[date] = None,
+    filter: Optional[str] = Query(None, description="Special filter mode. 'by_date' restricts to a single sale_date (requires the `date` param) - used by the calendar view."),
+    date: Optional[date] = Query(None, description="Used with filter=by_date, e.g. 2026-07-06"),
     min_equity_spread: Optional[float] = None,
     plaintiff_type: Optional[str] = None,
     occupancy_status: Optional[str] = None,
     flag_status: Optional[str] = None,
     auction_status: Optional[str] = None,
+    watchlist_only: bool = False,
     sort_by: str = Query("ranking_score", description="Field to sort by (default: ranking_score, the 0-100 investor-facing rank)"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
@@ -289,10 +315,18 @@ def list_properties(
     query = db.query(Property)
     if county:
         query = query.filter(Property.county == county)
-    if sale_date_from:
-        query = query.filter(Property.sale_date >= sale_date_from)
-    if sale_date_to:
-        query = query.filter(Property.sale_date <= sale_date_to)
+    if filter == "by_date" and date:
+        day_start = datetime.combine(date, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        query = query.filter(Property.sale_date >= day_start, Property.sale_date < day_end)
+    else:
+        if sale_date_from:
+            query = query.filter(Property.sale_date >= sale_date_from)
+        if sale_date_to:
+            query = query.filter(Property.sale_date <= sale_date_to)
+    if watchlist_only:
+        watchlisted = _watchlisted_ids(db)
+        query = query.filter(Property.id.in_(watchlisted)) if watchlisted else query.filter(False)
     if plaintiff_type:
         query = query.filter(Property.plaintiff_type == plaintiff_type)
     if occupancy_status:
@@ -352,6 +386,111 @@ def update_property(property_id: int, update: PropertyUpdate, db: Session = Depe
 
     db.commit()
     return _property_to_dict(prop, db)
+
+
+@app.patch("/api/properties/{property_id}/notes")
+def patch_property_notes(property_id: int, update: NotesUpdate, db: Session = Depends(get_db)):
+    """
+    Phase 3: dedicated endpoint for the NotesPad component, which auto-saves
+    on blur. Writes to investor_notes (separate from the general `notes`
+    field, which the scraper also writes to - see models.Property).
+    """
+    prop = db.query(Property).filter(Property.id == property_id).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    prop.investor_notes = update.investor_notes
+    db.commit()
+    return _property_to_dict(prop, db)
+
+
+# ---------------------------------------------------------------------------
+# Watchlist endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+@app.get("/api/watchlist")
+def get_watchlist(db: Session = Depends(get_db)):
+    rows = db.query(Watchlist).order_by(Watchlist.saved_at.desc()).all()
+    property_ids = [w.property_id for w in rows]
+    if not property_ids:
+        return []
+    props = db.query(Property).filter(Property.id.in_(property_ids)).all()
+    by_id = {p.id: p for p in props}
+    # Preserve watchlist order (most recently saved first), skipping any
+    # property_id whose Property row has since been deleted.
+    return [_property_to_dict(by_id[pid], db) for pid in property_ids if pid in by_id]
+
+
+@app.post("/api/watchlist/{property_id}")
+def add_to_watchlist(property_id: int, db: Session = Depends(get_db)):
+    prop = db.query(Property).filter(Property.id == property_id).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    existing = db.query(Watchlist).filter(Watchlist.property_id == property_id).first()
+    if not existing:
+        db.add(Watchlist(property_id=property_id, saved_at=datetime.utcnow()))
+        db.commit()
+    return _property_to_dict(prop, db)
+
+
+@app.delete("/api/watchlist/{property_id}")
+def remove_from_watchlist(property_id: int, db: Session = Depends(get_db)):
+    existing = db.query(Watchlist).filter(Watchlist.property_id == property_id).first()
+    if existing:
+        db.delete(existing)
+        db.commit()
+    prop = db.query(Property).filter(Property.id == property_id).first()
+    if not prop:
+        return {"property_id": property_id, "is_watchlisted": False}
+    return _property_to_dict(prop, db)
+
+
+# ---------------------------------------------------------------------------
+# Bid record endpoints (Phase 3) - manual investor-entered auction outcomes
+# ---------------------------------------------------------------------------
+@app.post("/api/bid-records")
+def create_bid_record(record: BidRecordCreate, db: Session = Depends(get_db)):
+    prop = db.query(Property).filter(Property.id == record.property_id).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    row = BidRecord(
+        property_id=record.property_id,
+        bid_amount=record.bid_amount,
+        sale_price=record.sale_price,
+        winner=record.winner,
+        notes=record.notes,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": row.id,
+        "property_id": row.property_id,
+        "bid_amount": row.bid_amount,
+        "sale_price": row.sale_price,
+        "winner": row.winner,
+        "notes": row.notes,
+        "created_at": row.created_at,
+    }
+
+
+@app.get("/api/bid-records")
+def list_bid_records(property_id: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(BidRecord)
+    if property_id is not None:
+        query = query.filter(BidRecord.property_id == property_id)
+    rows = query.order_by(BidRecord.created_at.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "property_id": r.property_id,
+            "bid_amount": r.bid_amount,
+            "sale_price": r.sale_price,
+            "winner": r.winner,
+            "notes": r.notes,
+            "created_at": r.created_at,
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +924,61 @@ def export_properties(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=properties_export.xlsx"},
         )
+
+
+# ---------------------------------------------------------------------------
+# CSV export with selectable columns (Phase 3) - distinct from the existing
+# /api/export (which always exports every column, csv or xlsx). The Phase 3
+# spec calls specifically for GET /api/export/csv?columns=rank,county,... so
+# the frontend can present column checkboxes rather than an all-or-nothing
+# dump. Kept alongside the original /api/export rather than replacing it, so
+# nothing that already links to /api/export breaks.
+# ---------------------------------------------------------------------------
+EXPORT_COLUMN_ALIASES = {
+    "rank": "ranking_score",
+    "judgment": "final_judgment",
+}
+
+
+@app.get("/api/export/csv")
+def export_csv_columns(
+    columns: Optional[str] = Query(None, description="Comma-separated list of column names to include, e.g. rank,county,address,judgment. Defaults to a sensible standard set if omitted."),
+    county: Optional[str] = None,
+    flag_status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(Property)
+    if county:
+        query = query.filter(Property.county == county)
+    if flag_status:
+        query = query.filter(Property.flag_status == flag_status)
+    rows = query.all()
+    records = [_property_to_dict(r, db) for r in rows]
+
+    default_columns = [
+        "ranking_score", "county", "address", "sale_date", "final_judgment",
+        "opening_bid", "equity_spread", "auction_status", "flag_status",
+    ]
+    if columns:
+        requested = [c.strip() for c in columns.split(",") if c.strip()]
+        requested = [EXPORT_COLUMN_ALIASES.get(c, c) for c in requested]
+    else:
+        requested = default_columns
+
+    df = pd.DataFrame(records)
+    available = [c for c in requested if c in df.columns]
+    missing = [c for c in requested if c not in df.columns]
+    if not available:
+        raise HTTPException(status_code=400, detail=f"None of the requested columns exist. Unknown: {missing}")
+    df = df[available]
+
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    buf.seek(0)
+    headers = {"Content-Disposition": "attachment; filename=properties_export.csv"}
+    if missing:
+        headers["X-Unknown-Columns"] = ",".join(missing)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers=headers)
 
 
 # ---------------------------------------------------------------------------

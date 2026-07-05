@@ -69,6 +69,13 @@ class Property(Base):
     notes = Column(Text)
     flag_status = Column(String, default="none")  # saved/dismissed/none
 
+    # Phase 3: dedicated investor notes field, separate from `notes` above
+    # (which is populated/overwritten by the scraper with NOT_SCRAPED_NOTE
+    # and general free text). investor_notes is only ever written by the
+    # investor via PATCH /api/properties/{id}/notes (NotesPad component),
+    # so it never gets clobbered by a re-scrape.
+    investor_notes = Column(Text)
+
     source_url = Column(String)
     raw_scraped_json = Column(JSON)
     is_demo_data = Column(Boolean, default=False)
@@ -122,3 +129,38 @@ class ScoreWeight(Base):
     key = Column(String, unique=True, nullable=False)
     weight = Column(Float, nullable=False)
     description = Column(Text)
+
+
+class Watchlist(Base):
+    """
+    Phase 3: investor's saved/tracked properties. Deliberately separate
+    from Property.flag_status ("saved"/"dismissed"/"none"), which already
+    existed and drives the dashboard filter dropdown - this table is the
+    dedicated star/heart "watchlist" concept from the Phase 3 spec, so we
+    don't overload flag_status's existing meaning. One row per watched
+    property; toggling twice (POST then DELETE) removes it cleanly.
+    """
+    __tablename__ = "watchlist"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    property_id = Column(Integer, nullable=False, unique=True, index=True)
+    saved_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BidRecord(Base):
+    """
+    Phase 3: a log of an actual (or planned) bid/outcome at auction for a
+    property, entered manually by the investor after attending a sale.
+    Never auto-populated by a scraper - this is investor-entered history,
+    used for tracking outcomes over time (won/lost, price paid vs.
+    estimate, etc.).
+    """
+    __tablename__ = "bid_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    property_id = Column(Integer, nullable=False, index=True)
+    bid_amount = Column(Float)
+    sale_price = Column(Float)
+    winner = Column(String)  # e.g. "us" / "third_party" / "plaintiff" / free text
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
