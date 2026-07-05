@@ -25,6 +25,19 @@ Same honesty rules as the auction-listing scrapers in this package
 - Rate limited politely: a single shared monotonic-clock delay
   (MIN_DELAY_SECONDS) is enforced across all callers of fetch_page_text,
   and every page load is capped at a 30s timeout per the Phase 1 spec.
+
+REAL VERIFICATION LOG (2026-07-05, live production `/enrich` test, see
+PROJECT_CONTEXT.md): calling this against the real Zillow and Redfin sites
+consistently hit `Page.goto: Timeout 30000ms exceeded` waiting for
+`wait_until="networkidle"` - no CAPTCHA/block text was ever detected
+because the page never finished loading in the first place. Both sites
+carry on continuous background traffic (analytics beacons, live-price
+polling, etc.) that apparently never lets the network go fully idle for
+Playwright's networkidle heuristic. Fixed by switching to
+`wait_until="domcontentloaded"` (fires once the DOM itself is parsed,
+regardless of ongoing background XHR/fetch polling) followed by an
+explicit short settle wait, which is the standard fix for this exact class
+of "page never goes idle" issue.
 - Idempotent: fetch_page_text has no side effects beyond the outbound
   request itself, so calling any of the get_*_estimate() functions
   repeatedly for the same address is always safe.
@@ -33,6 +46,7 @@ import re
 import time
 import logging
 from typing import Optional, Sequence
+from urllib.parse import quote
 
 logger = logging.getLogger("scrapers.estimates")
 
@@ -105,7 +119,17 @@ def fetch_page_text(url: str) -> Optional[str]:
             try:
                 page = browser.new_page(user_agent=USER_AGENT)
                 page.set_default_timeout(TIMEOUT_MS)
-                page.goto(url, wait_until="networkidle", timeout=TIMEOUT_MS)
+                page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
+                # domcontentloaded fires as soon as the DOM is parsed, before
+                # client-side JS has necessarily finished rendering dynamic
+                # content (e.g. a Zestimate figure injected after initial
+                # paint). A short settle wait gives that JS a chance to run
+                # without risking the same indefinite hang networkidle could
+                # cause on pages with continuous background polling.
+                try:
+                    page.wait_for_timeout(3000)
+                except Exception:
+                    pass
                 text = page.inner_text("body")
             finally:
                 browser.close()
@@ -125,11 +149,105 @@ def fetch_page_text(url: str) -> Optional[str]:
     return text
 
 
+DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/?q={query}"
+
+
+def resolve_property_url_via_search(
+    address: str, domain: str, path_prefix: str, url_pattern: str
+) -> Optional[str]:
+    """
+    Resolve `address` to a specific listing-site detail-page URL by querying
+    DuckDuckGo's no-JS HTML search endpoint for
+    `site:<domain><path_prefix> <address>` and pulling the first matching
+    URL out of the plain-text results.
+
+    REAL VERIFICATION LOG (2026-07-05): both Zillow and Realtor.com require
+    an opaque internal ID in the URL path (Zillow: zpid; Realtor.com:
+    an "M<mls-market-id>-<listing-id>" suffix) that cannot be guessed from
+    the address alone - confirmed live that constructing a URL from just
+    the address slug (e.g. zillow.com/homes/<address>_rb/ or
+    zillow.com/homedetails/<address>/ with no zpid) does NOT reach the
+    property page; Zillow silently redirects to a generic rental search
+    instead. Their own in-page address search also requires a live
+    autocomplete GraphQL call with an internal query the frontend doesn't
+    expose simply. DuckDuckGo's html.duckduckgo.com/html/ endpoint (JS-free,
+    meant for this kind of use) reliably surfaces the real canonical
+    detail-page URL - including the zpid/listing-id - as its top hit for an
+    exact-address query; confirmed live for
+    "17915 Saint Croix Isle Dr, Tampa, FL 33647" on both sites.
+
+    Returns None if no matching URL is found in the search results or the
+    search request itself fails (never fabricates a listing URL/ID).
+    """
+    if not address or not address.strip():
+        return None
+
+    query = f"site:{domain}{path_prefix} {address.strip()}"
+    search_url = DUCKDUCKGO_HTML_URL.format(query=quote(query))
+    text = fetch_page_text(search_url)
+    if not text:
+        return None
+
+    match = re.search(url_pattern, text)
+    if not match:
+        return None
+    return "https://" + match.group(0)
+
+
+def fetch_raw_response_text(url: str) -> Optional[str]:
+    """
+    Like fetch_page_text, but for endpoints that return raw JSON/text rather
+    than an HTML page to render (e.g. Redfin's location-autocomplete API).
+    Uses page.content()'s <pre> body that Chromium renders for a raw JSON
+    response, falling back to inner_text, so callers get the literal
+    response body to parse themselves. Returns None on any failure - same
+    never-fabricate contract as fetch_page_text.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning(
+            "playwright not installed / browser binaries not provisioned. "
+            "Cannot fetch %s.",
+            url,
+        )
+        return None
+
+    _respect_rate_limit()
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(user_agent=USER_AGENT)
+                page.set_default_timeout(TIMEOUT_MS)
+                page.goto(url, timeout=TIMEOUT_MS)
+                text = page.inner_text("body")
+            finally:
+                browser.close()
+    except Exception as exc:
+        logger.warning("Failed to fetch %s: %s", url, exc)
+        return None
+
+    return text
+
+
 def extract_dollar_amount_near_label(text: str, labels: Sequence[str]) -> Optional[float]:
     """
     Search rendered page text for the first occurrence of any of `labels`
-    (case-insensitive) followed within ~40 characters by a dollar figure,
-    e.g. 'Zestimate® $412,300' or 'Redfin Estimate: $389,000'.
+    (case-insensitive) followed by a dollar figure, e.g.
+    'Zestimate® $412,300' or 'Redfin Estimate: $389,000'.
+
+    REAL VERIFICATION LOG (2026-07-05): live-checked Realtor.com's actual
+    rendered detail page for a real address and found the "RealEstimate"
+    label and its dollar figure are separated by ~90 characters of
+    interleaved chart/table UI text ("Chart Table July 2026 Valuation
+    provider Estimate Collateral Analytics") once the page is flattened to
+    plain text - the original ~40-char window was too tight and would have
+    missed a real, present estimate. Widened to 400 chars to tolerate this
+    kind of layout noise while still requiring the figure look like a real
+    dollar amount (>= $1,000) rather than matching some unrelated stray
+    number far down the page.
 
     Returns None if no label/figure pair is found or the figure looks like
     a stray small number (e.g. a bed/bath count) rather than a real
@@ -139,7 +257,7 @@ def extract_dollar_amount_near_label(text: str, labels: Sequence[str]) -> Option
         return None
     for label in labels:
         pattern = re.compile(
-            re.escape(label) + r"[^$0-9]{0,40}\$\s?([\d,]{4,})",
+            re.escape(label) + r"[^$]{0,400}\$\s?([\d,]{4,})",
             re.IGNORECASE,
         )
         match = pattern.search(text)

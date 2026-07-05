@@ -4,25 +4,40 @@ single property address. Called by GET /api/properties/{id}/enrich
 (Phase 1 spec).
 
 See scrapers/estimate_common.py for the shared honesty/rate-limit/timeout
-rules this module follows. Real best-effort attempt via Playwright, returns
-None (never a guessed number) on any failure, blocked page, or missing
-figure. NOT live-verified against realtor.com from this sandbox (no network
-egress) - see PROJECT_CONTEXT.md.
+rules this module follows.
+
+REAL VERIFICATION LOG (2026-07-05): the previous version of this module
+guessed a Realtor.com URL directly from the address
+(`/realestateandhomes-search/<address>`), which is a search-results URL,
+not a detail page - it would never surface a RealEstimate figure. Fixed by
+resolving the address to its real
+`realtor.com/realestateandhomes-detail/<slug>_M<market>-<listing-id>` URL
+via estimate_common.resolve_property_url_via_search first. Live-checked the
+resolved detail page for "17915 Saint Croix Isle Dr, Tampa, FL 33647" and
+confirmed the page contains the literal "RealEstimate" label with a real
+dollar figure (Collateral Analytics valuation) - but separated by ~90
+characters of interleaved chart/table text once flattened to plain text,
+which is why extract_dollar_amount_near_label's search window was widened
+(see that function's docstring in estimate_common.py).
 """
 import logging
-from urllib.parse import quote
 
-from scrapers.estimate_common import extract_dollar_amount_near_label, fetch_page_text
+from scrapers.estimate_common import (
+    extract_dollar_amount_near_label,
+    fetch_page_text,
+    resolve_property_url_via_search,
+)
 
 logger = logging.getLogger("scrapers.realtor")
 
-# Realtor.com's general keyword search. An exact street-address query
-# typically resolves straight to the property detail page.
-SEARCH_URL_TEMPLATE = "https://www.realtor.com/realestateandhomes-search/{query}"
+REALTOR_DOMAIN = "realtor.com"
+REALTOR_PATH_PREFIX = "/realestateandhomes-detail"
+REALTOR_URL_PATTERN = r"www\.realtor\.com/realestateandhomes-detail/[\w\-]+"
 
-# Realtor.com has branded its automated valuation as "Realtor.com Estimate"
-# (also shown historically as "RealEstimate" on some page layouts).
-REALTOR_LABELS = ["Realtor.com Estimate", "RealEstimate"]
+# Realtor.com has branded its automated valuation as "RealEstimate"
+# (confirmed live 2026-07-05); "Realtor.com Estimate" kept as a secondary
+# fallback label in case of page-copy variants.
+REALTOR_LABELS = ["RealEstimate", "Realtor.com Estimate"]
 
 
 def get_realtor_estimate(address: str) -> float | None:
@@ -34,12 +49,18 @@ def get_realtor_estimate(address: str) -> float | None:
     if not address or not address.strip():
         return None
 
-    url = SEARCH_URL_TEMPLATE.format(query=quote(address.strip()))
-    text = fetch_page_text(url)
+    property_url = resolve_property_url_via_search(
+        address, REALTOR_DOMAIN, REALTOR_PATH_PREFIX, REALTOR_URL_PATTERN
+    )
+    if not property_url:
+        logger.info("No Realtor.com listing URL resolved for address %r", address)
+        return None
+
+    text = fetch_page_text(property_url)
     if not text:
         return None
 
     estimate = extract_dollar_amount_near_label(text, REALTOR_LABELS)
     if estimate is None:
-        logger.info("No Realtor.com estimate found for address %r at %s", address, url)
+        logger.info("No Realtor.com estimate found for address %r at %s", address, property_url)
     return estimate

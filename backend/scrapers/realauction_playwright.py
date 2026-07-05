@@ -55,6 +55,45 @@ REAL VERIFICATION LOG (2026-07-04):
   of one real AUCTION_ITEM (see tests/test_realauction_playwright.py).
   Full live verification should happen once deployed to an environment
   with real network access (see PROJECT_CONTEXT.md deployment plan).
+
+REAL VERIFICATION LOG (2026-07-05, live production deployment):
+  After the first live scrape (192 Hillsborough records), a real-browser
+  inspection of hillsborough.realforeclose.com surfaced two correctness
+  bugs in the version above, both confirmed via direct DOM inspection of a
+  live day (07/10/2026, a 15-active/18-scheduled day per the calendar):
+
+  1. **Mixing in closed/canceled auctions as if they were upcoming.**
+     `.AUCTION_ITEM` matches items in TWO separate containers on the page:
+     `#Area_W` ("Auctions Waiting" - the real upcoming/active auctions) and
+     `#Area_C` ("Auctions Closed or Canceled" - already-resolved sales).
+     The original selector (`.AUCTION_ITEM` with no scoping) grabbed both,
+     so already-closed/canceled sales were being written into the Property
+     table indistinguishable from real upcoming auctions. Fixed by tagging
+     each extracted item with whether it's inside `#Area_C` and dropping
+     those before they're ever added to `all_records`.
+  2. **No pagination handling - silently dropping records past page 1.**
+     The "Auctions Waiting" list paginates (a `.Head_W` widget with
+     `#curPWA` = current page number (`curpg` attribute), `#maxWA` = total
+     page count, and a `.PageRight` control that AJAX-updates the item list
+     in place - confirmed live: clicking it swapped in 5 new AITEM_* ids
+     with zero network navigation, URL unchanged). The original adapter
+     only ever read whatever was on page 1. On 07/10/2026 that meant 10 of
+     15 real active auctions were captured and 5 were silently missed - on
+     higher-volume days (the real calendar shows some days with 15-18+
+     scheduled) this could mean losing the majority of a day's listings.
+     Fixed with a bounded pagination loop: read `#maxWA`, click `.PageRight`
+     and wait for `#curPWA`'s `curpg` attribute to advance until it reaches
+     `#maxWA`, extracting `#Area_W .AUCTION_ITEM` fresh on every page and
+     deduping by `_aid` (AITEM_* ids are unique per item, not per page).
+     Capped at MAX_PAGES_PER_DAY to guarantee termination if the site's
+     pagination behaves unexpectedly (never an infinite loop).
+
+  Both fixes are defensive rather than assuming this exact DOM forever:
+  if `#Area_W`/`#Area_C`/`#curPWA`/`#maxWA` aren't present on some page
+  variant (e.g. a realtaxdeed.com county renders slightly differently),
+  the code falls back to the pre-fix behavior (grab whatever `.AUCTION_ITEM`
+  exists on the single loaded page) rather than raising or returning zero
+  records outright.
 """
 import re
 import time
@@ -67,6 +106,40 @@ from scrapers.base import BaseScraper, ScrapeResult
 # calendars are typically populated a few weeks out; 45 gives headroom
 # without scanning indefinitely. Configurable via county_config if needed.
 DEFAULT_LOOKAHEAD_DAYS = 45
+
+# Hard cap on pagination clicks per day, purely as a termination guarantee -
+# real Hillsborough days observed so far top out at 2 pages (~15-18 items),
+# so this leaves generous headroom without risking an infinite loop if the
+# site's pagination ever behaves unexpectedly (e.g. curpg stops advancing).
+MAX_PAGES_PER_DAY = 20
+
+_EXTRACT_ITEMS_JS = """
+(items) => items.map(item => {
+    const rec = {};
+    const statDivs = item.querySelectorAll('.Astat_DATA');
+    rec._auction_start_raw = statDivs.length ? statDivs[0].textContent.trim() : null;
+    rec._aid = item.getAttribute('aid') || item.id;
+    rec._in_closed_area = !!item.closest('#Area_C');
+    const rows = item.querySelectorAll('table.ad_tab tr');
+    let lastLabel = null;
+    const pairs = [];
+    rows.forEach(r => {
+        const lbl = r.querySelector('.AD_LBL');
+        const dta = r.querySelector('.AD_DTA');
+        const lblText = lbl ? lbl.textContent.trim() : '';
+        const dtaText = dta ? dta.textContent.trim() : '';
+        if (lblText) {
+            lastLabel = lblText;
+            pairs.push([lblText, dtaText]);
+        } else if (lastLabel && dtaText) {
+            const last = pairs[pairs.length - 1];
+            if (last) last[1] = (last[1] + ' ' + dtaText).trim();
+        }
+    });
+    rec._pairs = pairs;
+    return rec;
+})
+"""
 
 
 def _parse_money(text: Optional[str]) -> Optional[float]:
@@ -174,61 +247,102 @@ class RealAuctionPlaywrightScraper(BaseScraper):
                         except Exception:
                             pass  # fall through; item extraction below just finds 0
 
-                        try:
-                            day_records = page.eval_on_selector_all(
-                                ".AUCTION_ITEM",
-                                """
-                                (items) => items.map(item => {
-                                    const rec = {};
-                                    const statDivs = item.querySelectorAll('.Astat_DATA');
-                                    rec._auction_start_raw = statDivs.length ? statDivs[0].textContent.trim() : null;
-                                    rec._aid = item.getAttribute('aid');
-                                    const rows = item.querySelectorAll('table.ad_tab tr');
-                                    let lastLabel = null;
-                                    const pairs = [];
-                                    rows.forEach(r => {
-                                        const lbl = r.querySelector('.AD_LBL');
-                                        const dta = r.querySelector('.AD_DTA');
-                                        const lblText = lbl ? lbl.textContent.trim() : '';
-                                        const dtaText = dta ? dta.textContent.trim() : '';
-                                        if (lblText) {
-                                            lastLabel = lblText;
-                                            pairs.push([lblText, dtaText]);
-                                        } else if (lastLabel && dtaText) {
-                                            const last = pairs[pairs.length - 1];
-                                            if (last) last[1] = (last[1] + ' ' + dtaText).trim();
-                                        }
-                                    });
-                                    rec._pairs = pairs;
-                                    return rec;
-                                })
-                                """,
-                            )
-                        except Exception as exc:
-                            errors.append(f"{date_str}: DOM extraction failed ({exc})")
-                            continue
+                        seen_aids = set()
+                        day_had_extraction_error = False
 
-                        for item in day_records:
-                            record: Dict[str, Any] = {
-                                "county": county,
-                                "sale_date_raw": item.get("_auction_start_raw"),
-                                "source_item_id": item.get("_aid"),
-                                "source_url": url,
-                                "scraped_at": datetime.utcnow().isoformat(),
-                                "raw_fields": {},
-                            }
-                            for lbl, val in item.get("_pairs", []):
-                                field = LABEL_FIELD_MAP.get(lbl)
-                                if field:
-                                    record[field] = (
-                                        _parse_money(val) if field in MONEY_FIELDS else val
-                                    )
+                        for page_num in range(1, MAX_PAGES_PER_DAY + 1):
+                            try:
+                                # Prefer scoping to #Area_W (the real "Auctions
+                                # Waiting" list) so already-closed/canceled
+                                # items in #Area_C are never mistaken for
+                                # upcoming auctions. Falls back to the
+                                # unscoped selector if #Area_W isn't present
+                                # on this page variant (defensive, see
+                                # REAL VERIFICATION LOG above).
+                                if page.query_selector("#Area_W"):
+                                    item_selector = "#Area_W .AUCTION_ITEM"
                                 else:
-                                    record["raw_fields"][lbl] = val
-                            record["sale_date"] = _parse_auction_start(
-                                record.get("sale_date_raw")
-                            )
-                            all_records.append(record)
+                                    item_selector = ".AUCTION_ITEM"
+                                page_records = page.eval_on_selector_all(
+                                    item_selector, _EXTRACT_ITEMS_JS
+                                )
+                            except Exception as exc:
+                                errors.append(f"{date_str} page {page_num}: DOM extraction failed ({exc})")
+                                day_had_extraction_error = True
+                                break
+
+                            new_this_page = 0
+                            for item in page_records:
+                                if item.get("_in_closed_area"):
+                                    continue  # belt-and-suspenders even when item_selector was the unscoped fallback
+                                aid = item.get("_aid")
+                                if aid and aid in seen_aids:
+                                    continue  # already captured on an earlier page
+                                if aid:
+                                    seen_aids.add(aid)
+                                new_this_page += 1
+
+                                record: Dict[str, Any] = {
+                                    "county": county,
+                                    "sale_date_raw": item.get("_auction_start_raw"),
+                                    "source_item_id": item.get("_aid"),
+                                    "source_url": url,
+                                    "scraped_at": datetime.utcnow().isoformat(),
+                                    "raw_fields": {},
+                                }
+                                for lbl, val in item.get("_pairs", []):
+                                    field = LABEL_FIELD_MAP.get(lbl)
+                                    if field:
+                                        record[field] = (
+                                            _parse_money(val) if field in MONEY_FIELDS else val
+                                        )
+                                    else:
+                                        record["raw_fields"][lbl] = val
+                                record["sale_date"] = _parse_auction_start(
+                                    record.get("sale_date_raw")
+                                )
+                                all_records.append(record)
+
+                            # Pagination: #curPWA (curpg attribute) / #maxWA
+                            # give current/total page counts for the Waiting
+                            # list specifically. If they're not present (no
+                            # pagination widget rendered - e.g. a single-page
+                            # day, or a page variant without this control),
+                            # there's nothing more to page through.
+                            max_page_el = page.query_selector("#maxWA")
+                            cur_page_el = page.query_selector("#curPWA")
+                            if not max_page_el or not cur_page_el:
+                                break
+                            try:
+                                max_page = int((max_page_el.text_content() or "1").strip())
+                                cur_page = int(cur_page_el.get_attribute("curpg") or "1")
+                            except ValueError:
+                                break
+                            if cur_page >= max_page:
+                                break
+
+                            next_btn = page.query_selector(".Head_W .PageRight")
+                            if not next_btn:
+                                break
+                            next_btn.click()
+                            try:
+                                page.wait_for_function(
+                                    f"document.querySelector('#curPWA') && "
+                                    f"document.querySelector('#curPWA').getAttribute('curpg') == '{cur_page + 1}'",
+                                    timeout=8000,
+                                )
+                            except Exception:
+                                # Pagination click didn't advance as expected -
+                                # stop rather than risk looping on a stuck page
+                                # or re-scraping the same page indefinitely.
+                                errors.append(
+                                    f"{date_str}: pagination stalled after page {page_num} "
+                                    f"(expected to reach page {cur_page + 1} of {max_page})"
+                                )
+                                break
+
+                        if day_had_extraction_error and not all_records:
+                            continue
                 finally:
                     browser.close()
         except Exception as exc:
