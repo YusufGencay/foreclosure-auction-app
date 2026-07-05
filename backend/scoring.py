@@ -235,3 +235,118 @@ def compute_score(property_row, weights: Dict[str, float]) -> Dict[str, Any]:
         "component_breakdown": breakdown,
         "warnings": warnings,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: 0-100 ranking formula.
+#
+# rank = (deal_quality * 0.5) + (risk_score * 0.5), each sub-score already
+# normalized to 0-100 before combining. This is a separate, investor-facing
+# 0-100 figure from composite_score above (which stays an unbounded,
+# signed weighted sum used for the raw component breakdown/UI warnings) -
+# ranking_score is what drives the dashboard's default sort.
+# ---------------------------------------------------------------------------
+
+# Risk-side components pulled from the existing scoring engine's component
+# breakdown. Deliberately excludes equity_spread (deal quality is computed
+# separately below, from real third-party estimates rather than the
+# assessed-value-based market_value field) and absorption_rate (an honest
+# placeholder with no data source, not a risk signal).
+RISK_COMPONENT_KEYS = (
+    "lien_priority",
+    "bankruptcy",
+    "taxes_owed",
+    "code_liens",
+    "flood_zone",
+    "crime_rate",
+)
+
+
+def _compute_deal_quality_subscore(prop) -> Optional[float]:
+    """
+    gap = (avg_of_available_estimates - final_judgment) / avg_of_available_estimates
+    A bigger gap (final judgment far below what the property is actually
+    worth) means more built-in equity at the auction price - a better
+    deal - so it's normalized to a HIGHER 0-100 score.
+
+    Uses whichever of zillow_estimate/realtor_estimate/redfin_estimate are
+    actually populated (never fabricates a missing one). Returns None if
+    there isn't at least one real estimate and a final_judgment to compare
+    it against - the caller falls back to risk-score-only in that case,
+    per spec, rather than guessing a deal-quality figure.
+    """
+    estimates = [
+        e for e in (prop.zillow_estimate, prop.realtor_estimate, prop.redfin_estimate)
+        if e is not None and e > 0
+    ]
+    if not estimates:
+        return None
+
+    final_judgment = getattr(prop, "final_judgment", None)
+    if final_judgment is None:
+        return None
+
+    avg_estimate = sum(estimates) / len(estimates)
+    if avg_estimate <= 0:
+        return None
+
+    gap = (avg_estimate - final_judgment) / avg_estimate
+    clamped = max(-1.0, min(1.0, gap))
+    return (clamped + 1.0) * 50.0
+
+
+def _compute_risk_subscore(component_breakdown: Dict[str, Any]) -> float:
+    """
+    Weighted-average the existing scoring engine's risk-related component
+    scores (each already normalized to [-1, 1]) into a single [-1, 1]
+    composite, then rescale to 0-100 where HIGHER = LOWER risk (so it
+    combines intuitively with deal quality - bigger number is always
+    better for both halves of the ranking formula).
+
+    If every risk weight is configured to 0 (an investor could zero them
+    all out via PUT /api/weights), there's no risk signal to weight by, so
+    this returns a neutral 50.0 rather than dividing by zero or guessing.
+    """
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for key in RISK_COMPONENT_KEYS:
+        comp = component_breakdown.get(key)
+        if not comp:
+            continue
+        weight = comp.get("weight", 0.0)
+        if not weight:
+            continue
+        weighted_sum += comp.get("normalized_score", 0.0) * weight
+        total_weight += abs(weight)
+
+    if total_weight == 0:
+        composite = 0.0
+    else:
+        composite = weighted_sum / total_weight
+
+    composite = max(-1.0, min(1.0, composite))
+    return (composite + 1.0) * 50.0
+
+
+def compute_ranking_score(property_row, weights: Dict[str, float]) -> float:
+    """
+    property_row: a Property ORM instance (or any object with the same
+                  attribute names).
+    weights: dict of component_key -> weight (float), the same
+             score_weights-backed dict passed to compute_score().
+
+    Returns a 0-100 float: 50% deal quality (real third-party estimates vs.
+    final judgment) + 50% risk (existing lien/bankruptcy/tax/code-lien/
+    flood/crime scoring engine, rescaled). If no third-party estimates are
+    available yet (enrich hasn't run / all three scrapers came back None),
+    the deal-quality half is dropped and the rank is the risk score alone,
+    per spec - never a fabricated deal-quality figure.
+    """
+    score_result = compute_score(property_row, weights)
+    risk_score = _compute_risk_subscore(score_result["component_breakdown"])
+    deal_score = _compute_deal_quality_subscore(property_row)
+
+    if deal_score is None:
+        return round(risk_score, 2)
+
+    return round(deal_score * 0.5 + risk_score * 0.5, 2)

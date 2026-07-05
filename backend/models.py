@@ -74,9 +74,30 @@ class Property(Base):
     is_demo_data = Column(Boolean, default=False)
     last_scraped_at = Column(DateTime)
 
+    # Phase 2: lifecycle status of the auction itself (distinct from
+    # flag_status, which is the investor's own saved/dismissed workflow
+    # state). Set to "active" on every successful scrape that (re-)finds
+    # this case_number, and flipped to "canceled" by the twice-daily
+    # scheduled scrape when a previously-active, not-yet-occurred auction
+    # no longer appears in the source county calendar. Never fabricated -
+    # only ever set from an actual scrape comparison, never guessed.
+    auction_status = Column(String, default="active")  # active | canceled
+
     # Score fields
     equity_spread = Column(Float)
     composite_score = Column(Float)
+    ranking_score = Column(Float)
+
+    # Third-party value estimates (Phase 1: fetched on-demand via
+    # GET /api/properties/{id}/enrich, never fabricated - null until a
+    # scraper actually returns a real figure). estimates_last_updated
+    # gates re-scraping so the enrich endpoint only hits these sites again
+    # once the cached estimates are more than 24h old.
+    zillow_estimate = Column(Float)
+    realtor_estimate = Column(Float)
+    redfin_estimate = Column(Float)
+    market_conditions = Column(String)  # "buyer_market" | "seller_market" | None
+    estimates_last_updated = Column(DateTime)
 
 
 class ScrapeLog(Base):
@@ -88,6 +109,10 @@ class ScrapeLog(Base):
     success = Column(Boolean)
     error_message = Column(Text)
     records_found = Column(Integer)
+    # Phase 2: breakdown of what changed in this scrape run, so
+    # "log all changes to scrape_logs" is more than just a pass/fail flag.
+    new_count = Column(Integer, default=0)
+    canceled_count = Column(Integer, default=0)
 
 
 class ScoreWeight(Base):

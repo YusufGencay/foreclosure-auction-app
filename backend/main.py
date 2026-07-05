@@ -9,8 +9,8 @@ what requires manual verification or a headless browser.
 """
 import io
 import logging
-from datetime import datetime, date
-from typing import List, Optional
+from datetime import datetime, date, timedelta
+from typing import Dict, List, Optional
 
 import pandas as pd
 from pathlib import Path as _Path
@@ -23,14 +23,18 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from db import Base, engine, get_db, SessionLocal
+from db import Base, engine, get_db, SessionLocal, ensure_columns
 from models import County, Property, ScrapeLog, ScoreWeight
 from config import load_counties_config, TITLE_SEARCH_API_KEY, TITLE_SEARCH_PROVIDER
 from scrapers.sample_data import seed_sample_data
 from scrapers.base import run_scraper_safely, ScrapeResult
 from scrapers.realauction_playwright import RealAuctionPlaywrightScraper
 from scrapers.grantstreet import GrantStreetScraper
-from scoring import compute_score
+from scrapers.zillow_scraper import get_zillow_estimate
+from scrapers.realtor_scraper import get_realtor_estimate
+from scrapers.redfin_scraper import get_redfin_estimate
+from scrapers.market_conditions import get_market_conditions
+from scoring import compute_score, compute_ranking_score
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -88,6 +92,7 @@ scheduler = BackgroundScheduler()
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    ensure_columns(engine, Base)  # additive auto-migration, see db.py
     db = SessionLocal()
     try:
         _seed_weights(db)
@@ -100,22 +105,41 @@ def on_startup():
         db.close()
 
     if not scheduler.running:
-        scheduler.add_job(
-            _scrape_all_job,
-            "cron",
-            hour=3,
-            minute=0,
-            id="daily_scrape_all",
-            replace_existing=True,
-        )
+        _register_scheduler_jobs()
         scheduler.start()
-        logger.info("Scheduler started: daily scrape-all job registered for 03:00.")
+        logger.info("Scheduler started: scrape-all jobs registered for 06:00 and 18:00.")
 
 
 @app.on_event("shutdown")
 def on_shutdown():
     if scheduler.running:
         scheduler.shutdown(wait=False)
+
+
+def _register_scheduler_jobs():
+    """
+    Registers the twice-daily scrape-all cron jobs (06:00 and 18:00 per the
+    Phase 2 spec: cron `0 6 * * *` / `0 18 * * *`). Split out from
+    on_startup() so tests can register jobs against the module-level
+    scheduler without going through the rest of the app startup sequence
+    (DB seeding, demo data, etc.) - see tests/test_scheduler.py.
+    """
+    scheduler.add_job(
+        scrape_all_counties,
+        "cron",
+        hour=6,
+        minute=0,
+        id="scrape_all_6am",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        scrape_all_counties,
+        "cron",
+        hour=18,
+        minute=0,
+        id="scrape_all_6pm",
+        replace_existing=True,
+    )
 
 
 def _seed_weights(db: Session):
@@ -160,6 +184,12 @@ def _rescore_all(db: Session):
     for prop in db.query(Property).all():
         result = compute_score(prop, weights)
         prop.composite_score = result["composite_score"]
+        # Phase 2: 0-100 investor-facing ranking - 50% deal quality (real
+        # Zillow/Realtor.com/Redfin estimates vs. final judgment) + 50%
+        # risk (lien priority, bankruptcy, taxes, code liens, flood,
+        # crime). Falls back to risk-only if no estimates are populated
+        # yet (see scoring.compute_ranking_score).
+        prop.ranking_score = compute_ranking_score(prop, weights)
         # equity_spread raw dollar value always recomputed/shown
         prop.equity_spread = (prop.market_value or 0.0) - (prop.final_judgment or 0.0)
     db.commit()
@@ -223,10 +253,17 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "source_url": prop.source_url,
         "is_demo_data": prop.is_demo_data,
         "last_scraped_at": prop.last_scraped_at,
+        "auction_status": prop.auction_status,
         "equity_spread": (prop.market_value or 0.0) - (prop.final_judgment or 0.0),
         "composite_score": score["composite_score"],
+        "ranking_score": prop.ranking_score,
         "component_breakdown": score["component_breakdown"],
         "warnings": score["warnings"],
+        "zillow_estimate": prop.zillow_estimate,
+        "realtor_estimate": prop.realtor_estimate,
+        "redfin_estimate": prop.redfin_estimate,
+        "market_conditions": prop.market_conditions,
+        "estimates_last_updated": prop.estimates_last_updated,
     }
 
 
@@ -242,7 +279,8 @@ def list_properties(
     plaintiff_type: Optional[str] = None,
     occupancy_status: Optional[str] = None,
     flag_status: Optional[str] = None,
-    sort_by: str = Query("composite_score", description="Field to sort by"),
+    auction_status: Optional[str] = None,
+    sort_by: str = Query("ranking_score", description="Field to sort by (default: ranking_score, the 0-100 investor-facing rank)"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -261,6 +299,8 @@ def list_properties(
         query = query.filter(Property.occupancy_status == occupancy_status)
     if flag_status:
         query = query.filter(Property.flag_status == flag_status)
+    if auction_status:
+        query = query.filter(Property.auction_status == auction_status)
 
     rows = query.all()
 
@@ -269,7 +309,7 @@ def list_properties(
 
     results = [_property_to_dict(r, db) for r in rows]
 
-    sortable_fields = {"composite_score", "equity_spread", "sale_date", "final_judgment", "market_value", "taxes_owed"}
+    sortable_fields = {"ranking_score", "composite_score", "equity_spread", "sale_date", "final_judgment", "market_value", "taxes_owed"}
     if sort_by in sortable_fields:
         reverse = sort_dir == "desc"
         results.sort(key=lambda d: (d.get(sort_by) is None, d.get(sort_by)), reverse=reverse)
@@ -312,6 +352,104 @@ def update_property(property_id: int, update: PropertyUpdate, db: Session = Depe
 
     db.commit()
     return _property_to_dict(prop, db)
+
+
+# ---------------------------------------------------------------------------
+# Property enrichment (Zillow/Realtor.com/Redfin estimates + market
+# conditions) - lazy-loaded on demand when the frontend detail page mounts,
+# never as part of the batch auction scrapers.
+# ---------------------------------------------------------------------------
+ENRICH_CACHE_HOURS = 24
+
+
+def _extract_zip(address: Optional[str]) -> Optional[str]:
+    """Best-effort 5-digit zip extraction from a scraped address string,
+    e.g. '3402 PEARSON RD VALRICO, FL- 33596' -> '33596'. Returns None if
+    the address doesn't end in a recognizable 5-digit zip (never guessed)."""
+    if not address:
+        return None
+    parts = address.strip().split()
+    if parts and parts[-1].isdigit() and len(parts[-1]) == 5:
+        return parts[-1]
+    return None
+
+
+@app.get("/api/properties/{property_id}/enrich")
+def enrich_property(property_id: int, db: Session = Depends(get_db)):
+    """
+    Calls the Zillow/Realtor.com/Redfin estimate scrapers and the market
+    conditions lookup for this property, updates the Property record, and
+    returns the enriched property. Results are cached for
+    ENRICH_CACHE_HOURS: if estimates_last_updated is recent enough, this
+    just returns the cached record without re-scraping (idempotent, and
+    polite to the source sites on repeated detail-page visits).
+
+    Each of the four lookups is wrapped individually so a single scraper
+    failure (blocked page, site down, playwright not installed, etc.)
+    never prevents the other three from updating - failures are collected
+    and returned under "enrich_errors" rather than raising, and any
+    lookup that can't find a real figure is left null rather than guessed.
+    """
+    prop = db.query(Property).filter(Property.id == property_id).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    now = datetime.utcnow()
+    if prop.estimates_last_updated and (now - prop.estimates_last_updated) < timedelta(hours=ENRICH_CACHE_HOURS):
+        logger.info(
+            "Property %d estimates last updated %s (< %dh ago); returning cached values.",
+            property_id, prop.estimates_last_updated, ENRICH_CACHE_HOURS,
+        )
+        result = _property_to_dict(prop, db)
+        result["enrich_errors"] = []
+        result["enrich_cached"] = True
+        return result
+
+    if not prop.address:
+        raise HTTPException(status_code=400, detail="Property has no address to enrich against.")
+
+    zip_code = _extract_zip(prop.address)
+    errors: List[str] = []
+
+    try:
+        prop.zillow_estimate = get_zillow_estimate(prop.address)
+    except Exception as exc:
+        logger.exception("Zillow scraper failed for property %d", property_id)
+        errors.append(f"zillow: {exc}")
+
+    try:
+        prop.realtor_estimate = get_realtor_estimate(prop.address)
+    except Exception as exc:
+        logger.exception("Realtor.com scraper failed for property %d", property_id)
+        errors.append(f"realtor: {exc}")
+
+    try:
+        prop.redfin_estimate = get_redfin_estimate(prop.address)
+    except Exception as exc:
+        logger.exception("Redfin scraper failed for property %d", property_id)
+        errors.append(f"redfin: {exc}")
+
+    try:
+        prop.market_conditions = get_market_conditions(prop.county, zip_code)
+    except Exception as exc:
+        logger.exception("Market conditions lookup failed for property %d", property_id)
+        errors.append(f"market_conditions: {exc}")
+
+    prop.estimates_last_updated = now
+
+    # Phase 2: recompute composite_score/ranking_score right away so the
+    # newly-fetched estimates are reflected immediately, rather than
+    # waiting for the next scheduled _rescore_all() pass.
+    weights = _get_weights_dict(db)
+    prop.composite_score = compute_score(prop, weights)["composite_score"]
+    prop.ranking_score = compute_ranking_score(prop, weights)
+
+    db.commit()
+
+    result = _property_to_dict(prop, db)
+    result["enrich_errors"] = errors
+    result["enrich_cached"] = False
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -364,15 +502,20 @@ def _json_safe(value):
     return value
 
 
-def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict]) -> int:
+def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict]) -> Dict[str, int]:
     """
     Write scraper-extracted records into the Property table. Dedupes on
     (county, case_number) - a re-scrape updates the existing row rather than
     creating a duplicate. Only ever writes fields the scraper actually
     observed; everything else is left null (see NOT_SCRAPED_NOTE) rather
     than fabricated.
+
+    Returns {"new": n, "updated": n} so the caller can log a real count of
+    what changed in this run (see ScrapeLog.new_count / .canceled_count),
+    rather than just a single opaque "records_found" total.
     """
-    written = 0
+    new_count = 0
+    updated_count = 0
     for rec in records:
         case_number = rec.get("case_number")
         if not case_number:
@@ -395,19 +538,63 @@ def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict
         prop.raw_scraped_json = _json_safe(rec)
         prop.is_demo_data = False
         prop.last_scraped_at = datetime.utcnow()
+        # Reappearing in a fresh scrape means it's active again, even if a
+        # prior run had marked it canceled (e.g. a postponed sale that
+        # later got rescheduled and republished under the same case #).
+        prop.auction_status = "active"
         if not prop.notes:
             prop.notes = NOT_SCRAPED_NOTE
 
         if not existing:
             db.add(prop)
-        written += 1
+            new_count += 1
+        else:
+            updated_count += 1
 
     db.commit()
-    return written
+    return {"new": new_count, "updated": updated_count}
+
+
+def _mark_missing_auctions_canceled(db: Session, county_name: str, scraped_case_numbers: set) -> int:
+    """
+    Compares the latest successful scrape's case numbers against existing
+    Property rows for this county. Any row that: (a) is real (not demo
+    data), (b) isn't already marked canceled, (c) has a sale_date that
+    hasn't happened yet (or no sale_date at all), and (d) did NOT show up
+    in this scrape - gets marked auction_status="canceled".
+
+    Deliberately conservative: a sale with a sale_date in the past is left
+    alone (it already happened or the calendar rolled past it - that's not
+    the same thing as "canceled"), and demo data is never touched. Returns
+    the number of rows marked, for ScrapeLog.canceled_count.
+    """
+    now = datetime.utcnow()
+    candidates = (
+        db.query(Property)
+        .filter(Property.county == county_name)
+        .filter(Property.is_demo_data.is_(False))
+        .filter(Property.auction_status != "canceled")
+        .all()
+    )
+    marked = 0
+    for prop in candidates:
+        if not prop.case_number or prop.case_number in scraped_case_numbers:
+            continue
+        if prop.sale_date is not None and prop.sale_date < now:
+            continue  # already happened - historical, not "canceled"
+        prop.auction_status = "canceled"
+        marked += 1
+
+    if marked:
+        db.commit()
+    return marked
 
 
 def _scrape_one_county(db: Session, county_row: County) -> ScrapeResult:
     scraper_cls = SCRAPER_REGISTRY.get(county_row.platform)
+    new_count = 0
+    canceled_count = 0
+
     if not scraper_cls:
         result = ScrapeResult(
             success=False,
@@ -422,7 +609,18 @@ def _scrape_one_county(db: Session, county_row: County) -> ScrapeResult:
         }
         result = run_scraper_safely(scraper, county_config)
         if result.success and result.records:
-            _upsert_scraped_properties(db, county_row.name, result.records)
+            upsert_stats = _upsert_scraped_properties(db, county_row.name, result.records)
+            new_count = upsert_stats["new"]
+
+            scraped_case_numbers = {
+                r.get("case_number") for r in result.records if r.get("case_number")
+            }
+            canceled_count = _mark_missing_auctions_canceled(db, county_row.name, scraped_case_numbers)
+            if canceled_count:
+                logger.info(
+                    "Marked %d auction(s) canceled in %s (no longer present in latest scrape).",
+                    canceled_count, county_row.name,
+                )
             _rescore_all(db)
 
     county_row.last_scraped_at = datetime.utcnow()
@@ -436,6 +634,8 @@ def _scrape_one_county(db: Session, county_row: County) -> ScrapeResult:
         success=result.success,
         error_message=result.error_message,
         records_found=len(result.records) if result.records else 0,
+        new_count=new_count,
+        canceled_count=canceled_count,
     )
     db.add(log)
     db.commit()
@@ -479,8 +679,20 @@ def scrape_all(db: Session = Depends(get_db)):
     return {"results": summary}
 
 
-def _scrape_all_job():
-    """Used by the APScheduler daily cron job. Opens its own DB session."""
+def scrape_all_counties():
+    """
+    The twice-daily (06:00 / 18:00) scheduled job body - see
+    _register_scheduler_jobs(). Also callable directly (used by tests and
+    for a manual "run it now" trigger). Opens its own DB session since
+    APScheduler jobs run outside the FastAPI request/response cycle.
+
+    Scrapes every county via _scrape_one_county(), which already handles:
+    upserting new/updated auctions, marking auctions missing from the
+    latest scrape as canceled, and logging the outcome to scrape_logs.
+    Each county is wrapped in its own try/except here too (belt-and-
+    suspenders on top of run_scraper_safely) so one county's unexpected
+    failure can never abort the rest of the batch.
+    """
     db = SessionLocal()
     try:
         counties = db.query(County).all()
