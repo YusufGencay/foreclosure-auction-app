@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+apscheduler
+pyyaml
+python-dotenv
+requests
+beautifulsoup4
+openpyxl
+pandas
+pydantic
+playwright
+pytest
