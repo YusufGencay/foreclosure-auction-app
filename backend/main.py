@@ -781,6 +781,41 @@ def _scrape_one_county(db: Session, county_row: County) -> ScrapeResult:
     return result
 
 
+@app.post("/api/scrape/all")
+def scrape_all(db: Session = Depends(get_db)):
+    # REAL VERIFICATION LOG (2026-07-05): this route MUST be registered
+    # before POST /api/scrape/{county} below. Confirmed live in production
+    # that with the reverse order (as this file had until now),
+    # `POST /api/scrape/all` was silently swallowed by the `{county}` path
+    # param route matching literal "all" as a county name, which doesn't
+    # exist in the `counties` table -> raised HTTPException(404,
+    # "County 'all' not found") -> logged as a bare "404 Not Found" with no
+    # indication of the real cause. This is the actual reason the other 13
+    # counties never got their first scrape: the only thing that ever
+    # called scrape_all_counties() successfully was the scheduled
+    # 06:00/18:00 APScheduler job, which calls that Python function
+    # directly rather than going through this HTTP route - so a manual
+    # "scrape everything now" trigger via this endpoint has been broken
+    # since it was added, and would 404 immediately with no useful data
+    # written. FastAPI/Starlette match path routes in registration order,
+    # so the fix is simply defining the exact-literal route first.
+    counties = db.query(County).all()
+    summary = []
+    for c in counties:
+        try:
+            result = _scrape_one_county(db, c)
+        except Exception as exc:
+            logger.exception("Unexpected error scraping county %s in batch", c.name)
+            result = ScrapeResult(success=False, error_message=str(exc))
+        summary.append({
+            "county": c.name,
+            "success": result.success,
+            "records_found": len(result.records) if result.records else 0,
+            "error_message": result.error_message,
+        })
+    return {"results": summary}
+
+
 @app.post("/api/scrape/{county}")
 def scrape_county(county: str, db: Session = Depends(get_db)):
     county_row = db.query(County).filter(County.name == county).first()
@@ -797,25 +832,6 @@ def scrape_county(county: str, db: Session = Depends(get_db)):
         "records_found": len(result.records) if result.records else 0,
         "error_message": result.error_message,
     }
-
-
-@app.post("/api/scrape/all")
-def scrape_all(db: Session = Depends(get_db)):
-    counties = db.query(County).all()
-    summary = []
-    for c in counties:
-        try:
-            result = _scrape_one_county(db, c)
-        except Exception as exc:
-            logger.exception("Unexpected error scraping county %s in batch", c.name)
-            result = ScrapeResult(success=False, error_message=str(exc))
-        summary.append({
-            "county": c.name,
-            "success": result.success,
-            "records_found": len(result.records) if result.records else 0,
-            "error_message": result.error_message,
-        })
-    return {"results": summary}
 
 
 def scrape_all_counties():
