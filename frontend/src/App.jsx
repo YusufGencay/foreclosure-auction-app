@@ -1,10 +1,14 @@
 import React, { useEffect, useState, useCallback } from "react";
 import "./App.css";
-import { getProperties, exportUrl } from "./api.js";
+import { getProperties, exportUrl, exportCsvColumnsUrl } from "./api.js";
 import WarningBanners from "./WarningBanners.jsx";
+import WatchlistButton from "./WatchlistButton.jsx";
 import PropertyDetail from "./PropertyDetail.jsx";
 import CountyPanel from "./CountyPanel.jsx";
 import WeightsPanel from "./WeightsPanel.jsx";
+import CalendarView from "./CalendarView.jsx";
+import PropertyCard from "./PropertyCard.jsx";
+import CsvExportPanel from "./CsvExportPanel.jsx";
 
 const COUNTIES = [
   "Hillsborough", "Pinellas", "Pasco", "Hernando", "Manatee", "Sarasota",
@@ -69,6 +73,7 @@ export default function App() {
         <h1>Florida Foreclosure Auction Analysis &amp; Ranking Tool</h1>
         <nav>
           <button className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>Dashboard</button>
+          <button className={tab === "calendar" ? "active" : ""} onClick={() => setTab("calendar")}>Calendar</button>
           <button className={tab === "counties" ? "active" : ""} onClick={() => setTab("counties")}>Counties</button>
           <button className={tab === "weights" ? "active" : ""} onClick={() => setTab("weights")}>Score Weights</button>
         </nav>
@@ -76,6 +81,7 @@ export default function App() {
 
       {tab === "counties" && <CountyPanel />}
       {tab === "weights" && <WeightsPanel />}
+      {tab === "calendar" && <CalendarView onSelectProperty={setSelectedId} />}
 
       {tab === "dashboard" && (
         <>
@@ -108,8 +114,8 @@ export default function App() {
                 Card view
               </label>
             </div>
-            <a className="export-btn" href={exportUrl("csv", filters)}>Export CSV</a>
-            <a className="export-btn" href={exportUrl("xlsx", filters)}>Export XLSX</a>
+            <a className="export-btn" href={exportUrl("xlsx", filters)}>Export XLSX (all columns)</a>
+            <CsvExportPanel filters={filters} />
           </div>
 
           {error && <div className="error-text">{error}</div>}
@@ -127,6 +133,7 @@ export default function App() {
                   <th onClick={() => handleSort("occupancy_status")}>Occupancy {sortBy === "occupancy_status" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th>Auction Status</th>
                   <th>Flags</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -141,6 +148,7 @@ export default function App() {
                     <td>{p.occupancy_status || "—"}</td>
                     <td>{p.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (p.auction_status || "—")}</td>
                     <td><WarningBanners property={p} compact /></td>
+                    <td><WatchlistButton propertyId={p.id} initialWatchlisted={p.is_watchlisted} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -148,17 +156,7 @@ export default function App() {
           ) : (
             <div className="card-view">
               {data.results.slice(cardIndex, cardIndex + 2).map((p) => (
-                <div key={p.id} className={`property-card${p.auction_status === "canceled" ? " row-canceled" : ""}`} onClick={() => setSelectedId(p.id)}>
-                  <h3>{p.address} {p.is_demo_data && <span className="sample-tag-sm">DEMO</span>}</h3>
-                  <WarningBanners property={p} />
-                  <div>Ranking score: <strong>{p.ranking_score != null ? p.ranking_score.toFixed(1) : "—"}</strong> / 100</div>
-                  <div>County: {p.county}</div>
-                  <div>Sale date: {p.sale_date ? new Date(p.sale_date).toLocaleDateString() : "—"}</div>
-                  <div>Equity spread: {p.equity_spread != null ? `$${Math.round(p.equity_spread).toLocaleString()}` : "—"}</div>
-                  <div>Plaintiff type: {p.plaintiff_type || "—"}</div>
-                  <div>Occupancy: {p.occupancy_status || "—"}</div>
-                  <div>Auction status: {p.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (p.auction_status || "—")}</div>
-                </div>
+                <PropertyCard key={p.id} property={p} onClick={() => setSelectedId(p.id)} />
               ))}
               <div className="card-nav">
                 <button disabled={cardIndex === 0} onClick={() => setCardIndex(Math.max(0, cardIndex - 2))}>Prev</button>

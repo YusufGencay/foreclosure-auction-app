@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import WarningBanners from "./WarningBanners.jsx";
-import { getProperty, updateProperty, runTitleSearch, enrichProperty } from "./api.js";
+import WatchlistButton from "./WatchlistButton.jsx";
+import NotesPad from "./NotesPad.jsx";
+import PreBidChecklist from "./PreBidChecklist.jsx";
+import { getProperty, updateProperty, runTitleSearch, enrichProperty, createBidRecord, getBidRecords } from "./api.js";
 
 export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
   const [property, setProperty] = useState(null);
@@ -11,6 +14,14 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
   const [error, setError] = useState(null);
   const [enriching, setEnriching] = useState(false);
   const [enrichNote, setEnrichNote] = useState(null);
+  const [showChecklist, setShowChecklist] = useState(false);
+  const [bidRecords, setBidRecords] = useState([]);
+  const [bidForm, setBidForm] = useState({ bid_amount: "", sale_price: "", winner: "", notes: "" });
+  const [bidSaving, setBidSaving] = useState(false);
+
+  function loadBidRecords(id) {
+    getBidRecords(id).then(setBidRecords).catch((e) => setError(e.message));
+  }
 
   useEffect(() => {
     if (!propertyId) return;
@@ -21,7 +32,28 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
         setRehab(p.rehab_estimate_user_input ?? "");
       })
       .catch((e) => setError(e.message));
+    loadBidRecords(propertyId);
   }, [propertyId]);
+
+  async function handleBidFormSubmit(e) {
+    e.preventDefault();
+    setBidSaving(true);
+    try {
+      await createBidRecord({
+        property_id: propertyId,
+        bid_amount: bidForm.bid_amount === "" ? null : parseFloat(bidForm.bid_amount),
+        sale_price: bidForm.sale_price === "" ? null : parseFloat(bidForm.sale_price),
+        winner: bidForm.winner || null,
+        notes: bidForm.notes || null,
+      });
+      setBidForm({ bid_amount: "", sale_price: "", winner: "", notes: "" });
+      loadBidRecords(propertyId);
+    } catch (e2) {
+      setError(e2.message);
+    } finally {
+      setBidSaving(false);
+    }
+  }
 
   if (!propertyId) return null;
   if (error) return <div className="modal-backdrop"><div className="modal">Error: {error} <button onClick={onClose}>Close</button></div></div>;
@@ -94,11 +126,21 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}>×</button>
-        <h2>{property.address || "(no address)"} {property.is_demo_data && <span className="sample-tag">DEMO DATA - NOT REAL</span>}</h2>
+        <h2>
+          {property.address || "(no address)"} {property.is_demo_data && <span className="sample-tag">DEMO DATA - NOT REAL</span>}
+          <WatchlistButton propertyId={property.id} initialWatchlisted={property.is_watchlisted} onChange={onUpdated} />
+        </h2>
 
         <div className="ranking-badge">
           Ranking score: {property.ranking_score != null ? property.ranking_score.toFixed(1) : "—"} / 100
         </div>
+
+        <div className="action-row">
+          <button onClick={() => setShowChecklist(true)}>Pre-Bid Checklist</button>
+        </div>
+        {showChecklist && (
+          <PreBidChecklist propertyId={property.id} onClose={() => setShowChecklist(false)} />
+        )}
         {property.auction_status === "canceled" && (
           <div className="warning-banner">⚠ This auction no longer appears in the county's source calendar - it may have been canceled, postponed, or satisfied. Verify before bidding.</div>
         )}
@@ -192,6 +234,64 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
         <div>
           <button onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save"}</button>
         </div>
+
+        <h3>Investor Notes (auto-saves)</h3>
+        <NotesPad propertyId={property.id} initialValue={property.investor_notes} />
+
+        <h3>Bid History</h3>
+        {bidRecords.length === 0 ? (
+          <p style={{ fontSize: "0.85rem", color: "#666" }}>No bid history logged yet.</p>
+        ) : (
+          <table className="county-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Bid amount</th>
+                <th>Sale price</th>
+                <th>Winner</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bidRecords.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"}</td>
+                  <td>{r.bid_amount != null ? `$${Math.round(r.bid_amount).toLocaleString()}` : "—"}</td>
+                  <td>{r.sale_price != null ? `$${Math.round(r.sale_price).toLocaleString()}` : "—"}</td>
+                  <td>{r.winner || "—"}</td>
+                  <td>{r.notes || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <form onSubmit={handleBidFormSubmit} className="bid-record-form">
+          <input
+            type="number"
+            placeholder="Bid amount ($)"
+            value={bidForm.bid_amount}
+            onChange={(e) => setBidForm({ ...bidForm, bid_amount: e.target.value })}
+          />
+          <input
+            type="number"
+            placeholder="Sale price ($)"
+            value={bidForm.sale_price}
+            onChange={(e) => setBidForm({ ...bidForm, sale_price: e.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="Winner (e.g. us, third_party)"
+            value={bidForm.winner}
+            onChange={(e) => setBidForm({ ...bidForm, winner: e.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="Notes"
+            value={bidForm.notes}
+            onChange={(e) => setBidForm({ ...bidForm, notes: e.target.value })}
+          />
+          <button type="submit" disabled={bidSaving}>{bidSaving ? "Logging..." : "Log Bid"}</button>
+        </form>
       </div>
     </div>
   );

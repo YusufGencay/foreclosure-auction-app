@@ -101,4 +101,58 @@ export function exportUrl(format, params) {
   return `${BASE_URL}/api/export${qs({ ...params, format })}`;
 }
 
+// Phase 3: column-selectable CSV export - separate endpoint from the
+// original /api/export above (which always exports every column).
+export function exportCsvColumnsUrl(columns, params) {
+  return `${BASE_URL}/api/export/csv${qs({ ...params, columns: columns && columns.length ? columns.join(",") : undefined })}`;
+}
+
+// Phase 3: calendar view - all auctions on a single sale_date.
+export async function getPropertiesByDate(dateStr, params) {
+  const res = await fetch(`${BASE_URL}/api/properties${qs({ ...params, filter: "by_date", date: dateStr })}`);
+  return handle(res);
+}
+
+// Phase 3: watchlist
+export async function getWatchlist() {
+  const res = await fetch(`${BASE_URL}/api/watchlist`);
+  return handle(res);
+}
+
+export async function addToWatchlist(propertyId) {
+  const res = await fetch(`${BASE_URL}/api/watchlist/${propertyId}`, { method: "POST" });
+  return handle(res);
+}
+
+export async function removeFromWatchlist(propertyId) {
+  const res = await fetch(`${BASE_URL}/api/watchlist/${propertyId}`, { method: "DELETE" });
+  return handle(res);
+}
+
+// Phase 3: investor notes (auto-save on blur), distinct from the general
+// `notes` field/updateProperty above.
+export async function patchNotes(propertyId, investorNotes) {
+  const res = await fetch(`${BASE_URL}/api/properties/${propertyId}/notes`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ investor_notes: investorNotes }),
+  });
+  return handle(res);
+}
+
+// Phase 3: bid history log
+export async function createBidRecord(record) {
+  const res = await fetch(`${BASE_URL}/api/bid-records`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(record),
+  });
+  return handle(res);
+}
+
+export async function getBidRecords(propertyId) {
+  const res = await fetch(`${BASE_URL}/api/bid-records${qs({ property_id: propertyId })}`);
+  return handle(res);
+}
+
 export const API_BASE_URL = BASE_URL;
