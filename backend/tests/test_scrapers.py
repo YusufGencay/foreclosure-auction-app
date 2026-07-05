@@ -85,9 +85,61 @@ class _FakeChromium:
         return self._browser
 
 
+def _resolve_text(text, text_by_url, url):
+    if text_by_url is not None:
+        if callable(text_by_url):
+            return text_by_url(url)
+        for substr, t in text_by_url.items():
+            if substr in url:
+                return t
+        return None
+    return text
+
+
+class _FakeAPIResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def text(self):
+        return self._body
+
+
+class _FakeAPIRequestContext:
+    """Fakes playwright's `p.request.new_context()` APIRequestContext,
+    used by fetch_raw_response_text (Redfin's autocomplete API, the
+    DuckDuckGo search fetch) since 2026-07-05 - see that function's
+    docstring in estimate_common.py for why it moved off page.goto()."""
+
+    def __init__(self, text=None, text_by_url=None, raise_on_get=None):
+        self._text = text
+        self._text_by_url = text_by_url
+        self._raise_on_get = raise_on_get
+
+    def get(self, url, timeout=None):
+        if self._raise_on_get:
+            raise self._raise_on_get
+        return _FakeAPIResponse(_resolve_text(self._text, self._text_by_url, url))
+
+    def dispose(self):
+        pass
+
+
+class _FakeRequest:
+    def __init__(self, text=None, text_by_url=None, raise_on_get=None):
+        self._text = text
+        self._text_by_url = text_by_url
+        self._raise_on_get = raise_on_get
+
+    def new_context(self, user_agent=None, timeout=None):
+        return _FakeAPIRequestContext(
+            text=self._text, text_by_url=self._text_by_url, raise_on_get=self._raise_on_get
+        )
+
+
 class _FakePlaywrightContext:
-    def __init__(self, browser):
+    def __init__(self, browser, request):
         self.chromium = _FakeChromium(browser)
+        self.request = request
 
     def __enter__(self):
         return self
@@ -99,21 +151,27 @@ class _FakePlaywrightContext:
 def _patch_playwright(monkeypatch, text=None, text_by_url=None, raise_on_goto=None):
     """Patch playwright.sync_api.sync_playwright so estimate_common's
     `from playwright.sync_api import sync_playwright` (executed fresh
-    inside fetch_page_text on every call) picks up the fake. Returns the
-    fake browser so tests can assert on e.g. whether it was ever launched.
+    inside fetch_page_text/fetch_raw_response_text on every call) picks up
+    the fake. Returns the fake browser so tests can assert on e.g. whether
+    it was ever launched.
 
-    zillow/realtor/redfin now each make TWO browser round-trips per lookup
-    (resolve the real listing URL via a DuckDuckGo search, then fetch that
-    URL for the actual estimate figure) - pass `text_by_url` (a dict of
-    URL-substring -> page text, or a callable(url) -> text) to give each
-    round-trip its own canned response; `text` remains for the simple
-    single-request case (market_conditions, or a deliberately-empty/blocked
-    response that should look the same regardless of which URL is hit)."""
+    zillow/realtor/redfin now each make TWO round-trips per lookup: (1)
+    resolve the real listing URL via a raw-HTTP DuckDuckGo search
+    (p.request, fetch_raw_response_text) or, for Redfin, its own
+    autocomplete API (also p.request), then (2) a real rendered page fetch
+    (p.chromium, fetch_page_text) of that resolved URL for the actual
+    estimate figure. `text_by_url` (a dict of URL-substring -> response
+    text, or a callable(url) -> text) is shared across BOTH fake
+    transports so a single dict can supply canned responses for each step
+    regardless of which one a given call goes through; `text` remains for
+    the simple single-request case (market_conditions, or a deliberately
+    empty/blocked response that should look the same everywhere)."""
     page = _FakePage(text=text, text_by_url=text_by_url, raise_on_goto=raise_on_goto)
     browser = _FakeBrowser(page)
+    request = _FakeRequest(text=text, text_by_url=text_by_url, raise_on_get=raise_on_goto)
 
     def _fake_sync_playwright():
-        return _FakePlaywrightContext(browser)
+        return _FakePlaywrightContext(browser, request)
 
     monkeypatch.setattr("playwright.sync_api.sync_playwright", _fake_sync_playwright)
     return browser
