@@ -184,8 +184,14 @@ def resolve_property_url_via_search(
 
     query = f"site:{domain}{path_prefix} {address.strip()}"
     search_url = DUCKDUCKGO_HTML_URL.format(query=quote(query))
-    text = fetch_page_text(search_url)
-    if not text:
+    # DuckDuckGo's html.duckduckgo.com endpoint is plain server-rendered
+    # HTML with no client-side JS needed to see the result links/snippets,
+    # so it's fetched via the same raw-request path as the JSON APIs
+    # (fetch_raw_response_text) rather than a full page render
+    # (fetch_page_text) - faster, and avoids the exact class of
+    # render/read race documented in fetch_raw_response_text's docstring.
+    text = fetch_raw_response_text(search_url)
+    if _looks_blocked(text):
         return None
 
     match = re.search(url_pattern, text)
@@ -197,11 +203,29 @@ def resolve_property_url_via_search(
 def fetch_raw_response_text(url: str) -> Optional[str]:
     """
     Like fetch_page_text, but for endpoints that return raw JSON/text rather
-    than an HTML page to render (e.g. Redfin's location-autocomplete API).
-    Uses page.content()'s <pre> body that Chromium renders for a raw JSON
-    response, falling back to inner_text, so callers get the literal
-    response body to parse themselves. Returns None on any failure - same
-    never-fabricate contract as fetch_page_text.
+    than an HTML page to render (e.g. Redfin's location-autocomplete API,
+    DuckDuckGo's no-JS HTML search results).
+
+    REAL VERIFICATION LOG (2026-07-05, live production `/enrich` test): the
+    original version of this function did `page.goto(url)` then
+    `page.inner_text("body")`, exactly like fetch_page_text - but for a raw
+    JSON API response, Chromium renders its own JSON-viewer UI over the
+    response rather than a plain text node, and reading that back via
+    inner_text raced with the viewer's rendering in production: confirmed
+    live via a real browser session that the raw response for a Redfin
+    autocomplete call was the expected literal text
+    ('{}&&{"version":648,...}'), but the SAME call through Playwright in
+    production logged `json.JSONDecodeError: Extra data: line 1 column 5
+    (char 4)` when parsing it - i.e. the text Playwright actually read back
+    didn't match what a real interactive browser showed for the identical
+    URL. Fixed by using Playwright's dedicated API request context
+    (`playwright.request`) instead, which performs a plain HTTP GET and
+    returns the exact response bytes with no DOM/rendering step at all -
+    the correct tool for fetching a raw API/JSON endpoint rather than
+    routing it through a page render. This is also faster (no browser page
+    navigation) and carries fewer bot-detection signals than a full page
+    load. Returns None on any failure - same never-fabricate contract as
+    fetch_page_text.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -217,14 +241,14 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            request_context = p.request.new_context(
+                user_agent=USER_AGENT, timeout=TIMEOUT_MS
+            )
             try:
-                page = browser.new_page(user_agent=USER_AGENT)
-                page.set_default_timeout(TIMEOUT_MS)
-                page.goto(url, timeout=TIMEOUT_MS)
-                text = page.inner_text("body")
+                response = request_context.get(url, timeout=TIMEOUT_MS)
+                text = response.text()
             finally:
-                browser.close()
+                request_context.dispose()
     except Exception as exc:
         logger.warning("Failed to fetch %s: %s", url, exc)
         return None
