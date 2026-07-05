@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
+# Playwright's own OS-dependency installer pulls in everything Chromium
+# needs (fonts, codecs, etc.) - simpler and more reliable than hand-listing
+# apt packages, and it's a no-op re-run if already satisfied.
+RUN playwright install --with-deps chromium
+
 COPY backend/ ./backend/
 COPY config/ ./config/
 

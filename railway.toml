@@ -1,0 +1,19 @@
+# Railway deploy config.
+#
+# We pin the builder to "DOCKERFILE" explicitly rather than letting
+# Railway auto-detect (Nixpacks) because this repo has both a
+# frontend/ (Node) and backend/ (Python) directory at the root, which
+# Nixpacks has no single correct way to build together. The Dockerfile at
+# the project root does the multi-stage build (Node -> frontend/dist,
+# then Python + copies dist in) and is the source of truth for the build.
+#
+# No startCommand is set here because the Dockerfile's CMD already runs
+# uvicorn bound to $PORT; Railway will use that CMD as-is.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

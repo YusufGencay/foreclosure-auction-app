@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+*.egg-info/
+
+# Local SQLite databases (never commit real or scratch DB files)
+backend/data/*.db
+backend/data/*.db-journal
+
+# Env files with secrets - .env.example is the only one that should be committed
+.env
+backend/.env
+
+# Node / frontend build output
+frontend/node_modules/
+frontend/dist/
+
+# OS cruft
+.DS_Store
