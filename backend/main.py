@@ -348,6 +348,22 @@ NOT_SCRAPED_NOTE = (
 )
 
 
+def _json_safe(value):
+    """
+    Recursively convert a value into something the JSON column can encode -
+    datetime -> ISO string, dicts/lists handled recursively. Needed because
+    scraped records carry real datetime objects (e.g. parsed sale_date) that
+    SQLAlchemy's JSON type cannot serialize directly.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict]) -> int:
     """
     Write scraper-extracted records into the Property table. Dedupes on
@@ -376,7 +392,7 @@ def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict
         prop.opening_bid = rec.get("opening_bid")
         prop.assessed_value = rec.get("assessed_value")
         prop.source_url = rec.get("source_url")
-        prop.raw_scraped_json = rec
+        prop.raw_scraped_json = _json_safe(rec)
         prop.is_demo_data = False
         prop.last_scraped_at = datetime.utcnow()
         if not prop.notes:
