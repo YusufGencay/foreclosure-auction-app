@@ -142,7 +142,11 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           <PreBidChecklist propertyId={property.id} onClose={() => setShowChecklist(false)} />
         )}
         {property.auction_status === "canceled" && (
-          <div className="warning-banner">⚠ This auction no longer appears in the county's source calendar - it may have been canceled, postponed, or satisfied. Verify before bidding.</div>
+          <div className="warning-banner">
+            {property.cancellation_reason
+              ? `⚠ Canceled: ${property.cancellation_reason} (per the county's source site).`
+              : "⚠ This auction no longer appears in the county's source calendar - it may have been canceled, postponed, or satisfied. Verify before bidding."}
+          </div>
         )}
 
         <WarningBanners property={property} />
@@ -173,7 +177,16 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           <div><strong>Redemption notes:</strong> {property.redemption_notes || "—"}</div>
           <div><strong>Legal description:</strong> {property.legal_description || "—"}</div>
           <div><strong>Last scraped at:</strong> {property.last_scraped_at || "never (no live scrape yet)"}</div>
-          <div><strong>Auction status:</strong> {property.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (property.auction_status || "—")}</div>
+          <div>
+            <strong>Auction status:</strong>{" "}
+            {property.auction_status === "canceled" ? (
+              <span className="status-canceled">
+                canceled{property.cancellation_reason ? `: ${property.cancellation_reason}` : " (reason not shown by county)"}
+              </span>
+            ) : (
+              property.auction_status || "—"
+            )}
+          </div>
           <div><strong>Source URL:</strong> {property.source_url ? <a href={property.source_url} target="_blank" rel="noreferrer">{property.source_url}</a> : "—"}</div>
         </div>
 

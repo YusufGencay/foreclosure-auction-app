@@ -146,7 +146,15 @@ export default function App() {
                     <td>{p.equity_spread != null ? `$${Math.round(p.equity_spread).toLocaleString()}` : "—"}</td>
                     <td>{p.plaintiff_type || "—"}</td>
                     <td>{p.occupancy_status || "—"}</td>
-                    <td>{p.auction_status === "canceled" ? <span className="status-canceled">canceled</span> : (p.auction_status || "—")}</td>
+                    <td>
+                      {p.auction_status === "canceled" ? (
+                        <span className="status-canceled" title={p.cancellation_reason || "Canceled (no reason given by county site)"}>
+                          canceled{p.cancellation_reason ? `: ${p.cancellation_reason}` : ""}
+                        </span>
+                      ) : (
+                        p.auction_status || "—"
+                      )}
+                    </td>
                     <td><WarningBanners property={p} compact /></td>
                     <td><WatchlistButton propertyId={p.id} initialWatchlisted={p.is_watchlisted} /></td>
                   </tr>

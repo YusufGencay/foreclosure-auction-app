@@ -74,7 +74,11 @@ export default function PropertyCard({ property, onClick, onWatchlistChange }) {
               : `${property.days_to_auction}d to auction`}
           </span>
         )}
-        {property.auction_status === "canceled" && <span className="status-canceled">canceled</span>}
+        {property.auction_status === "canceled" && (
+          <span className="status-canceled" title={property.cancellation_reason || "Canceled (no reason given by county site)"}>
+            canceled{property.cancellation_reason ? `: ${property.cancellation_reason}` : ""}
+          </span>
+        )}
       </div>
 
       <WarningBanners property={property} compact />

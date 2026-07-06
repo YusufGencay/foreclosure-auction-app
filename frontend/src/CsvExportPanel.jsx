@@ -18,6 +18,7 @@ const AVAILABLE_COLUMNS = [
   { key: "hoa_balance", label: "HOA balance" },
   { key: "flag_status", label: "Flag status" },
   { key: "auction_status", label: "Auction status" },
+  { key: "cancellation_reason", label: "Cancellation reason" },
 ];
 
 const DEFAULT_SELECTED = new Set(["rank", "county", "address", "sale_date", "judgment", "opening_bid", "equity_spread"]);
