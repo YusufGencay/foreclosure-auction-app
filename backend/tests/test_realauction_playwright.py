@@ -19,6 +19,7 @@ from datetime import datetime
 from scrapers.realauction_playwright import (
     LABEL_FIELD_MAP,
     MONEY_FIELDS,
+    _build_record,
     _parse_auction_start,
     _parse_money,
 )
@@ -90,3 +91,56 @@ def test_unknown_label_falls_through_to_raw_fields():
             record["raw_fields"][lbl] = val
 
     assert record["raw_fields"] == {"Some New Field:": "surprise value"}
+
+
+# --- _build_record: active vs. canceled items (2026-07-06) ---
+#
+# Real item captured live from hillsborough.realforeclose.com's #Area_C
+# ("Auctions Closed or Canceled" section, 07/10/2026 docket) - confirmed
+# these items are NOT dropped/hidden by the site, they carry an explicit
+# "Auction Status" / reason (see realauction_playwright.py's REAL
+# VERIFICATION LOG). Real active item captured from the same day's
+# #Area_W section for comparison.
+REAL_CANCELED_ITEM = {
+    "_auction_start_raw": "Canceled per County",
+    "_status_label": "Auction Status",
+    "_aid": "AITEM_1496948",
+    "_in_closed_area": True,
+    "_pairs": [
+        ("Auction Type:", "FORECLOSURE"),
+        ("Case #:", "292024CA005466A001HC"),
+        ("Final Judgment Amount:", "$230,163.86"),
+        ("Parcel ID:", "193218A76000003000230U"),
+        ("Property Address:", "520 SERENITY MILL LOOP RUSKIN, FL- 33570"),
+        ("Assessed Value:", "$306,732.00"),
+        ("Plaintiff Max Bid:", "Hidden"),
+    ],
+}
+
+REAL_ACTIVE_ITEM = {
+    "_auction_start_raw": "07/10/2026 10:00 AM ET",
+    "_status_label": "Auction Starts",
+    "_aid": "AITEM_1400001",
+    "_in_closed_area": False,
+    "_pairs": REAL_PAIRS,
+}
+
+
+def test_build_record_canceled_item_captures_reason_not_a_date():
+    record = _build_record(REAL_CANCELED_ITEM, "Hillsborough", "https://example.com/day", canceled=True)
+    assert record["auction_status"] == "canceled"
+    assert record["cancellation_reason"] == "Canceled per County"
+    # A reason string must never be mis-parsed as (or fabricated into) a
+    # sale date - the source page genuinely doesn't show one here.
+    assert record["sale_date"] is None
+    assert record["sale_date_raw"] is None
+    assert record["case_number"] == "292024CA005466A001HC"
+    assert record["final_judgment"] == 230163.86
+
+
+def test_build_record_active_item_has_no_cancellation_reason():
+    record = _build_record(REAL_ACTIVE_ITEM, "Hillsborough", "https://example.com/day", canceled=False)
+    assert record["auction_status"] == "active"
+    assert record["cancellation_reason"] is None
+    assert record["sale_date"] == datetime(2026, 7, 10, 10, 0)
+    assert record["case_number"] == "292024CA001637A001HC"
