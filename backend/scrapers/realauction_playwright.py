@@ -116,8 +116,17 @@ MAX_PAGES_PER_DAY = 20
 _EXTRACT_ITEMS_JS = """
 (items) => items.map(item => {
     const rec = {};
+    // .Astat_DATA holds the value in this status widget - what it MEANS
+    // depends on the sibling label (.ASTAT_MSGA / .ASTAT_LBL): "Auction
+    // Starts" -> the value is a sale date/time; "Auction Status" -> the
+    // value is a cancellation reason (confirmed live 2026-07-06, e.g.
+    // "Canceled per County" on a #Area_C item). Capturing the label lets
+    // the Python side tell these two cases apart rather than trying (and
+    // failing) to parse a reason string as a date.
     const statDivs = item.querySelectorAll('.Astat_DATA');
     rec._auction_start_raw = statDivs.length ? statDivs[0].textContent.trim() : null;
+    const statLabelEl = item.querySelector('.ASTAT_MSGA, .ASTAT_LBL');
+    rec._status_label = statLabelEl ? statLabelEl.textContent.trim() : null;
     rec._aid = item.getAttribute('aid') || item.id;
     rec._in_closed_area = !!item.closest('#Area_C');
     const rows = item.querySelectorAll('table.ad_tab tr');
@@ -185,6 +194,48 @@ LABEL_FIELD_MAP = {
 }
 
 MONEY_FIELDS = {"final_judgment", "opening_bid", "assessed_value"}
+
+
+def _build_record(
+    item: Dict[str, Any], county: str, url: str, canceled: bool
+) -> Dict[str, Any]:
+    """
+    Build a scraped-property record dict from one extracted auction item
+    (see _EXTRACT_ITEMS_JS). Shared by both the active (#Area_W) and
+    closed/canceled (#Area_C) extraction passes in scrape() so the
+    label/field mapping logic isn't duplicated between them.
+
+    For active items, `.Astat_DATA`'s value is a sale date/time
+    ("Auction Starts"). For canceled items it's instead a cancellation
+    reason string ("Auction Status", e.g. "Canceled per County") -
+    confirmed live 2026-07-06. `canceled` tells this function which
+    interpretation applies so a reason string is never mis-parsed as (or
+    silently discarded in favor of) a sale date, and vice versa.
+    """
+    record: Dict[str, Any] = {
+        "county": county,
+        "source_item_id": item.get("_aid"),
+        "source_url": url,
+        "scraped_at": datetime.utcnow().isoformat(),
+        "raw_fields": {},
+        "auction_status": "canceled" if canceled else "active",
+    }
+    if canceled:
+        record["cancellation_reason"] = item.get("_auction_start_raw")
+        record["sale_date_raw"] = None
+        record["sale_date"] = None
+    else:
+        record["cancellation_reason"] = None
+        record["sale_date_raw"] = item.get("_auction_start_raw")
+        record["sale_date"] = _parse_auction_start(record["sale_date_raw"])
+
+    for lbl, val in item.get("_pairs", []):
+        field = LABEL_FIELD_MAP.get(lbl)
+        if field:
+            record[field] = _parse_money(val) if field in MONEY_FIELDS else val
+        else:
+            record["raw_fields"][lbl] = val
+    return record
 
 
 class RealAuctionPlaywrightScraper(BaseScraper):
@@ -281,27 +332,9 @@ class RealAuctionPlaywrightScraper(BaseScraper):
                                 if aid:
                                     seen_aids.add(aid)
                                 new_this_page += 1
-
-                                record: Dict[str, Any] = {
-                                    "county": county,
-                                    "sale_date_raw": item.get("_auction_start_raw"),
-                                    "source_item_id": item.get("_aid"),
-                                    "source_url": url,
-                                    "scraped_at": datetime.utcnow().isoformat(),
-                                    "raw_fields": {},
-                                }
-                                for lbl, val in item.get("_pairs", []):
-                                    field = LABEL_FIELD_MAP.get(lbl)
-                                    if field:
-                                        record[field] = (
-                                            _parse_money(val) if field in MONEY_FIELDS else val
-                                        )
-                                    else:
-                                        record["raw_fields"][lbl] = val
-                                record["sale_date"] = _parse_auction_start(
-                                    record.get("sale_date_raw")
+                                all_records.append(
+                                    _build_record(item, county, url, canceled=False)
                                 )
-                                all_records.append(record)
 
                             # Pagination: #curPWA (curpg attribute) / #maxWA
                             # give current/total page counts for the Waiting
@@ -340,6 +373,33 @@ class RealAuctionPlaywrightScraper(BaseScraper):
                                     f"(expected to reach page {cur_page + 1} of {max_page})"
                                 )
                                 break
+
+                        # Closed/canceled auctions (#Area_C): confirmed live
+                        # 2026-07-06 that these are NOT simply "gone" - the
+                        # site keeps them listed with an explicit "Auction
+                        # Status" / reason (e.g. "Canceled per County"), and
+                        # per investor feedback that reason should be shown
+                        # in the app rather than the listing just vanishing.
+                        # No pagination widget was found on #Area_C in live
+                        # testing, so this is a single one-shot extraction
+                        # (unlike #Area_W above) - defensive try/except so a
+                        # missing/changed #Area_C never breaks the rest of
+                        # the day's scrape.
+                        try:
+                            closed_records = page.eval_on_selector_all(
+                                "#Area_C .AUCTION_ITEM", _EXTRACT_ITEMS_JS
+                            )
+                        except Exception:
+                            closed_records = []
+                        for item in closed_records:
+                            aid = item.get("_aid")
+                            if aid and aid in seen_aids:
+                                continue
+                            if aid:
+                                seen_aids.add(aid)
+                            all_records.append(
+                                _build_record(item, county, url, canceled=True)
+                            )
 
                         if day_had_extraction_error and not all_records:
                             continue
