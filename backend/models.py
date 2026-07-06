@@ -90,6 +90,17 @@ class Property(Base):
     # only ever set from an actual scrape comparison, never guessed.
     auction_status = Column(String, default="active")  # active | canceled
 
+    # 2026-07-06: the reason a canceled auction was canceled, exactly as
+    # the county site states it (e.g. "Canceled per County", "Canceled per
+    # Plaintiff", "Removed from Sale") - captured only when the source page
+    # itself explicitly shows a status/reason (RealAuction's #Area_C
+    # "Auctions Closed or Canceled" section, confirmed live to include a
+    # literal reason string). Left null when cancellation was only
+    # inferred because a case number disappeared from a scrape with no
+    # reason ever shown on the source - never fabricated. Cleared back to
+    # null if the same case number later reappears as active again.
+    cancellation_reason = Column(Text)
+
     # Score fields
     equity_spread = Column(Float)
     composite_score = Column(Float)

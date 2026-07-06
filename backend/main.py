@@ -275,6 +275,7 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "is_demo_data": prop.is_demo_data,
         "last_scraped_at": prop.last_scraped_at,
         "auction_status": prop.auction_status,
+        "cancellation_reason": prop.cancellation_reason,
         "equity_spread": (prop.market_value or 0.0) - (prop.final_judgment or 0.0),
         "composite_score": score["composite_score"],
         "ranking_score": prop.ranking_score,
@@ -667,7 +668,16 @@ def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict
         )
         prop = existing or Property(county=county_name, case_number=case_number)
 
-        prop.sale_date = rec.get("sale_date")
+        is_canceled = rec.get("auction_status") == "canceled"
+
+        # 2026-07-06: a record scraped from RealAuction's #Area_C
+        # ("Auctions Closed or Canceled") section never has a sale
+        # date/time on the page - only a status reason - so don't let a
+        # canceled record null out a sale_date we already knew from a
+        # previous active scrape of the same case number. An active
+        # record's sale_date always overwrites, same as before.
+        if not (is_canceled and rec.get("sale_date") is None):
+            prop.sale_date = rec.get("sale_date")
         prop.address = rec.get("address")
         prop.parcel_id = rec.get("parcel_id")
         prop.final_judgment = rec.get("final_judgment")
@@ -677,10 +687,22 @@ def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict
         prop.raw_scraped_json = _json_safe(rec)
         prop.is_demo_data = False
         prop.last_scraped_at = datetime.utcnow()
-        # Reappearing in a fresh scrape means it's active again, even if a
-        # prior run had marked it canceled (e.g. a postponed sale that
-        # later got rescheduled and republished under the same case #).
-        prop.auction_status = "active"
+        if is_canceled:
+            # The source site explicitly shows this as closed/canceled with
+            # a stated reason - trust that directly rather than only ever
+            # inferring cancellation from a case number disappearing (see
+            # _mark_missing_auctions_canceled below, which is now purely a
+            # fallback for cases removed from the site entirely with no
+            # reason ever shown).
+            prop.auction_status = "canceled"
+            prop.cancellation_reason = rec.get("cancellation_reason")
+        else:
+            # Reappearing as an active listing in a fresh scrape means it's
+            # active again, even if a prior run had marked it canceled
+            # (e.g. a postponed sale later rescheduled and republished
+            # under the same case #) - clear any stale reason from before.
+            prop.auction_status = "active"
+            prop.cancellation_reason = None
         if not prop.notes:
             prop.notes = NOT_SCRAPED_NOTE
 
