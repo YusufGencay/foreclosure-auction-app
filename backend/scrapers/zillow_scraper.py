@@ -36,27 +36,33 @@ ZILLOW_URL_PATTERN = r"www\.zillow\.com/homedetails/[\w\-]+/\d+_zpid/"
 ZILLOW_LABELS = ["Zestimate®", "Zestimate"]
 
 
-def get_zillow_estimate(address: str) -> float | None:
+def get_zillow_estimate(address: str) -> dict:
     """
-    Look up Zillow's Zestimate for `address`. Returns the dollar figure as
-    a float, or None if the property couldn't be found, the page was
-    blocked, or no Zestimate is published for it (never fabricated).
+    Look up Zillow's Zestimate for `address`. Returns
+    {"estimate": float | None, "url": str | None} - `url` is the resolved
+    canonical zillow.com/homedetails/.../<zpid>_zpid/ page (Phase B.1,
+    2026-07-13: stored on the Property record and shown as a clickable
+    link, separately from whether an estimate figure was found on it) so
+    the investor can always click through and check the listing directly
+    even if the estimate figure itself couldn't be parsed. `estimate` is
+    None if the property couldn't be found, the page was blocked, or no
+    Zestimate is published for it (never fabricated).
     """
     if not address or not address.strip():
-        return None
+        return {"estimate": None, "url": None}
 
     property_url = resolve_property_url_via_search(
         address, ZILLOW_DOMAIN, ZILLOW_PATH_PREFIX, ZILLOW_URL_PATTERN
     )
     if not property_url:
         logger.info("No Zillow listing URL resolved for address %r", address)
-        return None
+        return {"estimate": None, "url": None}
 
     text = fetch_page_text(property_url)
     if not text:
-        return None
+        return {"estimate": None, "url": property_url}
 
     estimate = extract_dollar_amount_near_label(text, ZILLOW_LABELS)
     if estimate is None:
         logger.info("No Zestimate figure found for address %r at %s", address, property_url)
-    return estimate
+    return {"estimate": estimate, "url": property_url}

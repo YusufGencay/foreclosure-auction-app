@@ -91,14 +91,18 @@ def _resolve_property_url(address: str) -> str | None:
     return None
 
 
-def get_redfin_estimate(address: str) -> float | None:
+def get_redfin_estimate(address: str) -> dict:
     """
-    Look up Redfin's estimate for `address`. Returns the dollar figure as a
-    float, or None if the property couldn't be found, the page was
-    blocked, or no estimate is published for it (never fabricated).
+    Look up Redfin's estimate for `address`. Returns
+    {"estimate": float | None, "url": str | None} (Phase B.1, 2026-07-13) -
+    `url` is the resolved redfin.com/.../home/<id> page, stored separately
+    from whether an estimate figure was actually found on it, so the
+    investor can always click through to the real listing. `estimate` is
+    None if the property couldn't be found, the page was blocked, or no
+    estimate is published for it (never fabricated).
     """
     if not address or not address.strip():
-        return None
+        return {"estimate": None, "url": None}
 
     address = address.strip()
     property_path = _resolve_property_url(address)
@@ -113,13 +117,13 @@ def get_redfin_estimate(address: str) -> float | None:
         )
         if not property_url:
             logger.info("No Redfin address match found for %r", address)
-            return None
+            return {"estimate": None, "url": None}
 
     text = fetch_page_text(property_url)
     if not text:
-        return None
+        return {"estimate": None, "url": property_url}
 
     estimate = extract_dollar_amount_near_label(text, REDFIN_LABELS)
     if estimate is None:
         logger.info("No Redfin Estimate found for address %r at %s", address, property_url)
-    return estimate
+    return {"estimate": estimate, "url": property_url}

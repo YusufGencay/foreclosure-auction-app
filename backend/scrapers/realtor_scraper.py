@@ -40,27 +40,31 @@ REALTOR_URL_PATTERN = r"www\.realtor\.com/realestateandhomes-detail/[\w\-]+"
 REALTOR_LABELS = ["RealEstimate", "Realtor.com Estimate"]
 
 
-def get_realtor_estimate(address: str) -> float | None:
+def get_realtor_estimate(address: str) -> dict:
     """
-    Look up Realtor.com's estimate for `address`. Returns the dollar figure
-    as a float, or None if the property couldn't be found, the page was
+    Look up Realtor.com's estimate for `address`. Returns
+    {"estimate": float | None, "url": str | None} (Phase B.1, 2026-07-13) -
+    `url` is the resolved realtor.com/realestateandhomes-detail/... page,
+    stored separately from whether an estimate figure was actually found on
+    it, so the investor can always click through to the real listing.
+    `estimate` is None if the property couldn't be found, the page was
     blocked, or no estimate is published for it (never fabricated).
     """
     if not address or not address.strip():
-        return None
+        return {"estimate": None, "url": None}
 
     property_url = resolve_property_url_via_search(
         address, REALTOR_DOMAIN, REALTOR_PATH_PREFIX, REALTOR_URL_PATTERN
     )
     if not property_url:
         logger.info("No Realtor.com listing URL resolved for address %r", address)
-        return None
+        return {"estimate": None, "url": None}
 
     text = fetch_page_text(property_url)
     if not text:
-        return None
+        return {"estimate": None, "url": property_url}
 
     estimate = extract_dollar_amount_near_label(text, REALTOR_LABELS)
     if estimate is None:
         logger.info("No Realtor.com estimate found for address %r at %s", address, property_url)
-    return estimate
+    return {"estimate": estimate, "url": property_url}
