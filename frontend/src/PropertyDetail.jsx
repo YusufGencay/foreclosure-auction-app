@@ -59,8 +59,45 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
   if (error) return <div className="modal-backdrop"><div className="modal">Error: {error} <button onClick={onClose}>Close</button></div></div>;
   if (!property) return <div className="modal-backdrop"><div className="modal">Loading...</div></div>;
 
-  const zillowUrl = `https://www.zillow.com/homes/${encodeURIComponent(property.address || "")}_rb/`;
-  const realtorUrl = `https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(property.address || "")}`;
+  // Prefer the real canonical detail-page URL resolved server-side during
+  // /enrich (Phase B.1, 2026-07-13: property.zillow_url/realtor_url/
+  // redfin_url, only ever set when the scraper actually confirmed a real
+  // matching page - see zillow_scraper.py etc.). Fall back to a generic
+  // address-search link (which was always guessed, never guaranteed to
+  // land on the right property) only if enrich hasn't run yet.
+  const zillowUrl = property.zillow_url || `https://www.zillow.com/homes/${encodeURIComponent(property.address || "")}_rb/`;
+  const realtorUrl = property.realtor_url || `https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(property.address || "")}`;
+  const redfinUrl = property.redfin_url || null;
+
+  // Phase D.1 (2026-07-13): best-effort pre-filled link to propertyscout.io's
+  // public address-search page. propertyscout.io's actual search form is a
+  // client-rendered SPA behind app.propertyscout.io with no confirmed
+  // public deep-link parameter contract (checked live 2026-07-13 - the
+  // marketing site's "Property Owner Search" page has Address/City/State/
+  // Zip fields, but they're populated via client JS, not URL query params
+  // we could verify), so this pre-fills what their URL structure is known
+  // to accept (nothing confirmed) and otherwise just lands the investor on
+  // the right search page to re-enter the address manually.
+  const propertyScoutUrl = `https://propertyscout.io/property-owner-search/?address=${encodeURIComponent(property.address || "")}`;
+
+  // Phase C.3 (2026-07-13): USFWS Wetlands Mapper link-out, centered on the
+  // property's geocoded coordinates when available (populated by the
+  // real FEMA/Census lookup during /enrich). No scraping - link-out only,
+  // per spec. Falls back to the general mapper tool if coordinates aren't
+  // available yet (enrich hasn't run, or the address didn't geocode).
+  const wetlandsMapperUrl = "https://www.fws.gov/wetlandsmapper";
+
+  // Phase D.2 (2026-07-13): niche.com school ratings. Live-checked
+  // 2026-07-13: niche.com's zip-filtered search results are loaded
+  // client-side after page load, not present in the initial server
+  // response, so a reliable scrape isn't possible without a full browser
+  // render - per spec, falling back to a pre-filled link-out instead of
+  // guessing/fabricating school data.
+  const zipMatch = (property.address || "").match(/\b(\d{5})\b(?!.*\d{5})/);
+  const schoolsZip = zipMatch ? zipMatch[1] : null;
+  const nicheSchoolsUrl = schoolsZip
+    ? `https://www.niche.com/k12/search/best-schools/?zip=${schoolsZip}`
+    : null;
 
   async function handleSave() {
     setSaving(true);
@@ -172,7 +209,12 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           <div><strong>Taxes owed:</strong> {property.taxes_owed != null ? `$${property.taxes_owed.toLocaleString()}` : "—"}</div>
           <div><strong>Code liens:</strong> {property.code_liens != null ? `$${property.code_liens.toLocaleString()}` : "—"}</div>
           <div><strong>HOA balance:</strong> {property.hoa_balance != null ? `$${property.hoa_balance.toLocaleString()}` : "—"}</div>
-          <div><strong>Flood zone:</strong> {property.flood_zone || "—"}</div>
+          <div>
+            <strong>Flood zone:</strong> {property.flood_zone || "—"}
+            {property.flood_zone_source && (
+              <span style={{ fontSize: "0.75rem", color: "#666" }}> ({property.flood_zone_source})</span>
+            )}
+          </div>
           <div><strong>Bankruptcy flag:</strong> {String(property.bankruptcy_flag)}</div>
           <div><strong>Redemption notes:</strong> {property.redemption_notes || "—"}</div>
           <div><strong>Legal description:</strong> {property.legal_description || "—"}</div>
@@ -201,6 +243,7 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
               <span className={`market-condition-tag ${property.market_conditions}`}>{property.market_conditions.replace("_", " ")}</span>
             ) : "unavailable"}
           </div>
+          <div><strong>Zip median sale price:</strong> {property.zip_median_sale_price != null ? `$${Math.round(property.zip_median_sale_price).toLocaleString()}` : "unavailable"}</div>
           <div><strong>Estimates last updated:</strong> {property.estimates_last_updated || "never"}</div>
         </div>
         <div className="action-row">
@@ -220,10 +263,49 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
         <div className="link-row">
           <a href={zillowUrl} target="_blank" rel="noreferrer">View on Zillow →</a>
           <a href={realtorUrl} target="_blank" rel="noreferrer">View on Realtor.com →</a>
+          {redfinUrl && <a href={redfinUrl} target="_blank" rel="noreferrer">View on Redfin →</a>}
+        </div>
+
+        <h3>Location risk</h3>
+        <div className="detail-grid">
+          <div>
+            <strong>Crime grade (crimegrade.org):</strong>{" "}
+            {property.crime_grade || "unavailable - click Refresh Estimates to look up"}
+            {property.crime_grade_source_url && (
+              <> <a href={property.crime_grade_source_url} target="_blank" rel="noreferrer">source →</a></>
+            )}
+          </div>
+          <div>
+            <strong>Wetlands (USFWS Wetlands Mapper):</strong>{" "}
+            <a href={wetlandsMapperUrl} target="_blank" rel="noreferrer">Open Wetlands Mapper →</a>
+            {property.latitude != null && property.longitude != null ? (
+              <span style={{ fontSize: "0.75rem", color: "#666" }}>
+                {" "}(pan/search to {property.latitude.toFixed(5)}, {property.longitude.toFixed(5)} - the mapper tool's
+                URL structure doesn't confirm auto-centering, so this coordinate is provided to enter manually)
+              </span>
+            ) : (
+              <span style={{ fontSize: "0.75rem", color: "#666" }}> (run Refresh Estimates first to geocode this property's coordinates)</span>
+            )}
+          </div>
+          <div>
+            <strong>Nearby schools (niche.com):</strong>{" "}
+            {nicheSchoolsUrl ? (
+              <a href={nicheSchoolsUrl} target="_blank" rel="noreferrer">View schools near this zip →</a>
+            ) : "no zip code found in address"}
+          </div>
         </div>
 
         <div className="action-row">
-          <button onClick={handleTitleSearch}>Run Title Search</button>
+          <button onClick={handleTitleSearch}>Run Title Search (configured provider)</button>
+          <a
+            className="export-btn"
+            href={propertyScoutUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: "inline-block", textDecoration: "none", textAlign: "center" }}
+          >
+            Manual Title Search (PropertyScout.io) →
+          </a>
           <button onClick={() => handleFlag("saved")} className={property.flag_status === "saved" ? "active" : ""}>Flag / Save</button>
           <button onClick={() => handleFlag("dismissed")} className={property.flag_status === "dismissed" ? "active" : ""}>Dismiss</button>
           <button onClick={() => handleFlag("none")}>Clear flag</button>

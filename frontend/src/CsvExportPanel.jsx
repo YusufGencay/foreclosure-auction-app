@@ -19,6 +19,10 @@ const AVAILABLE_COLUMNS = [
   { key: "flag_status", label: "Flag status" },
   { key: "auction_status", label: "Auction status" },
   { key: "cancellation_reason", label: "Cancellation reason" },
+  { key: "zip_median_sale_price", label: "Zip median sale price" },
+  { key: "market_conditions", label: "Market conditions" },
+  { key: "crime_grade", label: "Crime grade" },
+  { key: "flood_zone", label: "Flood zone" },
 ];
 
 const DEFAULT_SELECTED = new Set(["rank", "county", "address", "sale_date", "judgment", "opening_bid", "equity_spread"]);
