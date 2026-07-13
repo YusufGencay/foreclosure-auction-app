@@ -94,6 +94,49 @@ REAL VERIFICATION LOG (2026-07-05, live production deployment):
   the code falls back to the pre-fix behavior (grab whatever `.AUCTION_ITEM`
   exists on the single loaded page) rather than raising or returning zero
   records outright.
+
+REAL VERIFICATION LOG (2026-07-13, Phase 1 coverage audit):
+  Investigated a user report that many properties were still missing
+  (~1,068 in DB across 14 counties). Live-compared each county's real
+  RealAuction calendar against `GET /api/properties?county=X` for
+  Hillsborough, Orange, and Polk (the three counties named in the audit
+  spec), then swept the remaining 11 counties' live DOM once the root
+  cause below was found, to see how widely it applied.
+
+  **Root cause found: Orange County returns 0 properties in the DB despite
+  `last_scrape_success: true` and no logged error, while its live calendar
+  shows dozens of real scheduled sales (e.g. 24/28 FC on 07/14/2026).**
+  Confirmed via direct JS execution against the live
+  orange.realforeclose.com preview page: Orange's RealAuction template
+  renders the label/value widget as a flat `div.ad_tab` containing
+  alternating `div.AD_LBL` / `div.AD_DTA` children with NO `<table>`/`<tr>`
+  wrapper - every other one of the 14 counties checked this session
+  (Hillsborough, Pinellas, Pasco, Hernando, Manatee, Sarasota, Osceola,
+  Seminole, Lake, Volusia, Brevard, Marion - Orange is the only exception
+  found) uses `table.ad_tab` with `<tr>` rows, which is what the extraction
+  JS was hard-coded to require (`table.ad_tab tr`). On Orange's page that
+  selector matched zero rows, so every `.AUCTION_ITEM` was found (satisfying
+  the scraper's own success check, since `all_records` ends up non-empty)
+  but produced an empty `_pairs` list - no `case_number` was ever extracted,
+  and `_upsert_scraped_properties` in main.py silently skips any record
+  without a case_number (`if not case_number: continue`), so the DB write
+  step had nothing to write. Net effect: a real, confirmed-live gap of an
+  entire county's worth of properties (dozens per week) with zero visible
+  error anywhere in the system - not a demo-data or lookahead-window issue.
+  Fixed by pairing `.AD_LBL`/`.AD_DTA` elements directly in document order
+  (scoped to whatever tag the `.ad_tab` container is) instead of requiring
+  a `<tr>` grouping - verified against both the table-based (Hillsborough)
+  and div-based (Orange) live DOM structures with the exact same code path.
+
+  Also checked as part of this audit and confirmed NOT to be a problem:
+  `DEFAULT_LOOKAHEAD_DAYS=45` - RealAuction's own calendar for Hillsborough/
+  Orange/Polk does not populate sales more than a few weeks out in practice
+  (spot-checked live), so 45 days of headroom is not currently cutting
+  anything off. Pagination (`#curPWA`/`#maxWA`/`.PageRight`) was confirmed
+  live on a real 3-page day (Orange, 07/14/2026, 24 active items across 3
+  pages of ~10) and worked correctly. `#Area_W`-only scoping was present
+  and correct on every county checked (all had `#Area_W`/`#Area_C`, no
+  county rendered waiting auctions in a differently-id'd container).
 """
 import re
 import time
@@ -129,20 +172,39 @@ _EXTRACT_ITEMS_JS = """
     rec._status_label = statLabelEl ? statLabelEl.textContent.trim() : null;
     rec._aid = item.getAttribute('aid') || item.id;
     rec._in_closed_area = !!item.closest('#Area_C');
-    const rows = item.querySelectorAll('table.ad_tab tr');
+    // REAL VERIFICATION LOG (2026-07-13, live coverage audit): confirmed via
+    // Chrome DOM inspection that Orange County's RealAuction template
+    // renders the label/value widget as a flat `div.ad_tab` containing
+    // alternating `div.AD_LBL` / `div.AD_DTA` children with NO `<table>`/
+    // `<tr>` wrapper at all - unlike Hillsborough/Pinellas/Pasco/Hernando/
+    // Manatee/Sarasota/Osceola/Seminole/Lake/Volusia/Brevard/Marion (all
+    // confirmed live this session to use `table.ad_tab` with `<tr>` rows).
+    // The old `table.ad_tab tr`-scoped selector matched ZERO rows on
+    // Orange's page, so every item there silently produced an empty
+    // `_pairs` list (no case_number extracted) even though `.AUCTION_ITEM`
+    // divs themselves were found (satisfying the scraper's "success" check)
+    // - the net effect was every Orange record being silently dropped in
+    // `_upsert_scraped_properties` (case_number required to dedupe/insert)
+    // with zero indication anywhere (no error, `last_scrape_success: true`).
+    // Fixed by pairing off `.AD_LBL`/`.AD_DTA` elements directly in document
+    // order (scoped to the `.ad_tab` container, whatever tag it is) instead
+    // of requiring a `<tr>` grouping - this works identically for both the
+    // table-based and div-based template variants.
+    const pairEls = item.querySelectorAll('.ad_tab .AD_LBL, .ad_tab .AD_DTA');
     let lastLabel = null;
     const pairs = [];
-    rows.forEach(r => {
-        const lbl = r.querySelector('.AD_LBL');
-        const dta = r.querySelector('.AD_DTA');
-        const lblText = lbl ? lbl.textContent.trim() : '';
-        const dtaText = dta ? dta.textContent.trim() : '';
-        if (lblText) {
-            lastLabel = lblText;
-            pairs.push([lblText, dtaText]);
-        } else if (lastLabel && dtaText) {
+    pairEls.forEach(el => {
+        const text = el.textContent.trim();
+        if (el.classList.contains('AD_LBL')) {
+            if (text) {
+                lastLabel = text;
+                pairs.push([text, '']);
+            }
+            // an empty label cell is a continuation row (e.g. address line
+            // 2) - keep lastLabel so the following AD_DTA attaches below.
+        } else if (pairs.length && lastLabel) {
             const last = pairs[pairs.length - 1];
-            if (last) last[1] = (last[1] + ' ' + dtaText).trim();
+            last[1] = (last[1] ? last[1] + ' ' : '') + text;
         }
     });
     rec._pairs = pairs;
