@@ -4,6 +4,15 @@
 .app-header nav button { margin-left: 6px; padding: 6px 12px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 4px; }
 .app-header nav button.active { background: #2b5aed; color: #fff; border-color: #2b5aed; }
 
+/* Phase 1 (2026-07-13): "Update All Counties" dashboard button */
+.update-all-counties { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.update-all-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border: 1px solid #2b5aed; background: #2b5aed; color: #fff; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.update-all-btn:disabled { background: #6f8ce0; border-color: #6f8ce0; cursor: not-allowed; }
+.update-all-progress { font-size: 0.78rem; color: #333; max-width: 320px; }
+.update-all-hint { font-size: 0.7rem; color: #777; }
+.spinner { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.5); border-top-color: #fff; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .filters-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
 .filters-bar select, .filters-bar input[type="number"] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
 .export-btn { padding: 6px 10px; background: #2b5aed; color: #fff; border-radius: 4px; text-decoration: none; font-size: 0.85rem; }

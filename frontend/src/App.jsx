@@ -9,6 +9,7 @@ import WeightsPanel from "./WeightsPanel.jsx";
 import CalendarView from "./CalendarView.jsx";
 import PropertyCard from "./PropertyCard.jsx";
 import CsvExportPanel from "./CsvExportPanel.jsx";
+import UpdateAllCountiesButton from "./UpdateAllCountiesButton.jsx";
 
 const COUNTIES = [
   "Hillsborough", "Pinellas", "Pasco", "Hernando", "Manatee", "Sarasota",
@@ -71,6 +72,7 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>Florida Foreclosure Auction Analysis &amp; Ranking Tool</h1>
+        <UpdateAllCountiesButton onDone={load} />
         <nav>
           <button className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>Dashboard</button>
           <button className={tab === "calendar" ? "active" : ""} onClick={() => setTab("calendar")}>Calendar</button>
