@@ -199,7 +199,9 @@ def test_zillow_success(monkeypatch):
             "zillow.com/homedetails/123-Main-St": "123 Main St\nZestimate® $412,300\n",
         },
     )
-    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") == 412300.0
+    result = get_zillow_estimate("123 Main St, Tampa, FL 33602")
+    assert result["estimate"] == 412300.0
+    assert result["url"] == "https://www.zillow.com/homedetails/123-Main-St-Tampa-FL-33602/11111111_zpid/"
 
 
 def test_zillow_no_estimate_found(monkeypatch):
@@ -210,7 +212,11 @@ def test_zillow_no_estimate_found(monkeypatch):
             "zillow.com/homedetails/123-Main-St": "123 Main St - no Zestimate on this page",
         },
     )
-    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") is None
+    result = get_zillow_estimate("123 Main St, Tampa, FL 33602")
+    assert result["estimate"] is None
+    # URL is still returned even when no estimate figure was found on the
+    # resolved page, so the investor can click through regardless.
+    assert result["url"] == "https://www.zillow.com/homedetails/123-Main-St-Tampa-FL-33602/11111111_zpid/"
 
 
 def test_zillow_no_search_match_never_fetches_property_page(monkeypatch):
@@ -218,23 +224,23 @@ def test_zillow_no_search_match_never_fetches_property_page(monkeypatch):
     # address doesn't exist on Zillow) - must return None without ever
     # fabricating/guessing a property URL to fetch.
     _patch_playwright(monkeypatch, text="No relevant results found.")
-    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") is None
+    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_zillow_blocked_page(monkeypatch):
     _patch_playwright(monkeypatch, text="Please complete the CAPTCHA to continue")
-    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") is None
+    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_zillow_navigation_failure(monkeypatch):
     _patch_playwright(monkeypatch, raise_on_goto=TimeoutError("navigation timeout"))
-    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") is None
+    assert get_zillow_estimate("123 Main St, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_zillow_empty_address_never_launches_browser(monkeypatch):
     browser = _patch_playwright(monkeypatch, text="Zestimate® $412,300")
-    assert get_zillow_estimate("") is None
-    assert get_zillow_estimate("   ") is None
+    assert get_zillow_estimate("") == {"estimate": None, "url": None}
+    assert get_zillow_estimate("   ") == {"estimate": None, "url": None}
     assert browser.closed is False  # launch() was never reached
 
 
@@ -257,7 +263,9 @@ def test_realtor_success(monkeypatch):
             "realtor.com/realestateandhomes-detail/456-Oak-Ave": "RealEstimate $305,000",
         },
     )
-    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") == 305000.0
+    result = get_realtor_estimate("456 Oak Ave, Tampa, FL 33602")
+    assert result["estimate"] == 305000.0
+    assert result["url"] == "https://www.realtor.com/realestateandhomes-detail/456-Oak-Ave_Tampa_FL_33602_M12345-67890"
 
 
 def test_realtor_no_estimate_found(monkeypatch):
@@ -268,22 +276,24 @@ def test_realtor_no_estimate_found(monkeypatch):
             "realtor.com/realestateandhomes-detail/456-Oak-Ave": "No matching properties",
         },
     )
-    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") is None
+    result = get_realtor_estimate("456 Oak Ave, Tampa, FL 33602")
+    assert result["estimate"] is None
+    assert result["url"] == "https://www.realtor.com/realestateandhomes-detail/456-Oak-Ave_Tampa_FL_33602_M12345-67890"
 
 
 def test_realtor_no_search_match_never_fetches_property_page(monkeypatch):
     _patch_playwright(monkeypatch, text="No relevant results found.")
-    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") is None
+    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_realtor_blocked_page(monkeypatch):
     _patch_playwright(monkeypatch, text="Unusual traffic detected from your network")
-    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") is None
+    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_realtor_navigation_failure(monkeypatch):
     _patch_playwright(monkeypatch, raise_on_goto=RuntimeError("net::ERR_CONNECTION_RESET"))
-    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") is None
+    assert get_realtor_estimate("456 Oak Ave, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 # --- Redfin ---
@@ -307,7 +317,9 @@ def test_redfin_success(monkeypatch):
             "redfin.com/FL/Tampa/789-Pine-Rd": "Redfin Estimate $389,450",
         },
     )
-    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") == 389450.0
+    result = get_redfin_estimate("789 Pine Rd, Tampa, FL 33602")
+    assert result["estimate"] == 389450.0
+    assert result["url"] == "https://www.redfin.com/FL/Tampa/789-Pine-Rd-33602/home/99999999"
 
 
 def test_redfin_no_estimate_found(monkeypatch):
@@ -318,24 +330,26 @@ def test_redfin_no_estimate_found(monkeypatch):
             "redfin.com/FL/Tampa/789-Pine-Rd": "No homes match your search",
         },
     )
-    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") is None
+    result = get_redfin_estimate("789 Pine Rd, Tampa, FL 33602")
+    assert result["estimate"] is None
+    assert result["url"] == "https://www.redfin.com/FL/Tampa/789-Pine-Rd-33602/home/99999999"
 
 
 def test_redfin_autocomplete_and_search_fallback_both_fail(monkeypatch):
     # Autocomplete API returns garbage/no match AND the DuckDuckGo fallback
     # search also finds nothing - must return None, never fabricate a URL.
     _patch_playwright(monkeypatch, text="{}&&{\"payload\":{\"sections\":[]}}")
-    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") is None
+    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_redfin_blocked_page(monkeypatch):
     _patch_playwright(monkeypatch, text="Are you a robot? Verify to proceed.")
-    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") is None
+    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 def test_redfin_navigation_failure(monkeypatch):
     _patch_playwright(monkeypatch, raise_on_goto=RuntimeError("net::ERR_CONNECTION_RESET"))
-    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") is None
+    assert get_redfin_estimate("789 Pine Rd, Tampa, FL 33602") == {"estimate": None, "url": None}
 
 
 # --- Market conditions ---
