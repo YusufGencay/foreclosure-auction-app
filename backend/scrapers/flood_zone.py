@@ -9,23 +9,22 @@ Two-step lookup, both against free public government APIs, no key needed:
   1. Geocode the address to (lat, lng) via geocode.py (Census Geocoder).
   2. Query FEMA's National Flood Hazard Layer (NFHL) ArcGIS REST map
      service for the flood zone polygon containing that point:
-       https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query
+       https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query
      Layer 28 ("Flood Hazard Zones") is FEMA's own documented layer ID for
      this dataset in the public NFHL service. Returns FLD_ZONE (e.g. "AE",
      "X", "VE") and ZONE_SUBTY (e.g. "0.2 PCT ANNUAL CHANCE FLOOD HAZARD").
 
-NOT independently live-verified from this dev environment: this sandbox's
-network egress is restricted to a narrow allowlist (confirmed separately -
-even pypi.org and generic github.com are blocked here), and a direct fetch
-of hazards.fema.gov returned empty/no response through this session's
-tooling, so the exact live JSON shape below could not be confirmed
-end-to-end the way geocode.py's Census Geocoder call was. The query is
-built directly from FEMA's own documented ArcGIS REST API contract
-(https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer,
-a standard, widely-used public endpoint with no key requirement) and fails
-safe: any non-200 response, unexpected JSON shape, or request error results
-in "unknown / verify manually" rather than a guessed zone. Verify live
-once deployed (Railway has full network access, unlike this dev sandbox).
+REAL VERIFICATION LOG (2026-07-13, live production): the first version of
+this module used the WRONG path - `/gis/nfhl/rest/services/...` - which
+returned a real HTTP 404 ("Access Manager WebSEAL server cannot find the
+resource") once deployed and actually reachable from Railway (this dev
+sandbox itself has no route to hazards.fema.gov at all, so the bug wasn't
+caught before deploy). Confirmed live via a real browser session that the
+correct path is `/arcgis/rest/services/public/NFHL/MapServer/28/query`
+(no "nfhl" segment) - queried live for a real Sarasota County property's
+geocoded coordinates (27.111557, -82.215616) and got back a real result:
+`{"features":[{"attributes":{"FLD_ZONE":"AE","ZONE_SUBTY":null}}]}`. Fixed
+to the correct path below.
 
 Never fabricates a flood zone - returns the honest placeholder on any
 failure at any step.
@@ -40,7 +39,7 @@ from scrapers.geocode import geocode_address
 logger = logging.getLogger("scrapers.flood_zone")
 
 NFHL_QUERY_URL = (
-    "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
+    "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query"
 )
 TIMEOUT_SECONDS = 15
 
