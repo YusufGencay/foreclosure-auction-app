@@ -9,6 +9,7 @@ what requires manual verification or a headless browser.
 """
 import io
 import logging
+import threading
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 
@@ -854,6 +855,34 @@ def _scrape_one_county(db: Session, county_row: County) -> ScrapeResult:
     return result
 
 
+# Phase 1 (2026-07-13): "Update All Counties" dashboard button needs (a) a
+# guard against two full-batch scrapes running at once (this endpoint scrapes
+# counties one at a time in a for-loop, so it never itself exceeds the
+# "max 2 concurrent" guardrail - but nothing previously stopped a second
+# POST /api/scrape/all from starting mid-run, e.g. a double-click or the
+# 06:00/18:00 scheduled job firing while a manual run is still in progress,
+# which would hit the same sites twice at once) and (b) progress the
+# frontend can poll instead of blocking on this endpoint's response, since a
+# full pass across all 14 counties (each up to 45 lookahead days,
+# rate-limited) can take several minutes. `_scrape_all_lock` is a plain
+# threading.Lock (not asyncio) because these are sync def routes, which
+# FastAPI/Starlette run in a worker thread pool - a plain Lock is the
+# correct primitive there. `_scrape_all_state` is read by GET
+# /api/scrape-status below; it's process-local (not persisted to the DB),
+# which is fine since progress-polling only needs to work within the
+# lifetime of one running batch on one process.
+_scrape_all_lock = threading.Lock()
+_scrape_all_state: Dict[str, object] = {
+    "running": False,
+    "total": 0,
+    "completed": 0,
+    "last_county": None,
+    "last_count": None,
+    "started_at": None,
+    "finished_at": None,
+}
+
+
 @app.post("/api/scrape/all")
 def scrape_all(db: Session = Depends(get_db)):
     # REAL VERIFICATION LOG (2026-07-05): this route MUST be registered
@@ -872,21 +901,48 @@ def scrape_all(db: Session = Depends(get_db)):
     # since it was added, and would 404 immediately with no useful data
     # written. FastAPI/Starlette match path routes in registration order,
     # so the fix is simply defining the exact-literal route first.
-    counties = db.query(County).all()
-    summary = []
-    for c in counties:
-        try:
-            result = _scrape_one_county(db, c)
-        except Exception as exc:
-            logger.exception("Unexpected error scraping county %s in batch", c.name)
-            result = ScrapeResult(success=False, error_message=str(exc))
-        summary.append({
-            "county": c.name,
-            "success": result.success,
-            "records_found": len(result.records) if result.records else 0,
-            "error_message": result.error_message,
+    if not _scrape_all_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A full county scrape is already in progress. Check "
+                "GET /api/scrape-status for live progress rather than "
+                "starting another one."
+            ),
+        )
+    try:
+        counties = db.query(County).all()
+        _scrape_all_state.update({
+            "running": True,
+            "total": len(counties),
+            "completed": 0,
+            "last_county": None,
+            "last_count": None,
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
         })
-    return {"results": summary}
+        summary = []
+        for c in counties:
+            try:
+                result = _scrape_one_county(db, c)
+            except Exception as exc:
+                logger.exception("Unexpected error scraping county %s in batch", c.name)
+                result = ScrapeResult(success=False, error_message=str(exc))
+            records_found = len(result.records) if result.records else 0
+            summary.append({
+                "county": c.name,
+                "success": result.success,
+                "records_found": records_found,
+                "error_message": result.error_message,
+            })
+            _scrape_all_state["completed"] += 1
+            _scrape_all_state["last_county"] = c.name
+            _scrape_all_state["last_count"] = records_found
+        return {"results": summary}
+    finally:
+        _scrape_all_state["running"] = False
+        _scrape_all_state["finished_at"] = datetime.utcnow().isoformat()
+        _scrape_all_lock.release()
 
 
 @app.post("/api/scrape/{county}")
@@ -920,31 +976,70 @@ def scrape_all_counties():
     Each county is wrapped in its own try/except here too (belt-and-
     suspenders on top of run_scraper_safely) so one county's unexpected
     failure can never abort the rest of the batch.
+
+    Shares `_scrape_all_lock` with POST /api/scrape/all (Phase 1, 2026-07-13)
+    so the scheduled run and a manual "Update All Counties" click can never
+    overlap and hit the same sites twice at once. If the lock is already
+    held (a manual run is in progress), this scheduled run is skipped
+    entirely rather than queued or run in parallel - the next scheduled
+    slot (or a manual retry) will pick up anything this skip missed.
     """
+    if not _scrape_all_lock.acquire(blocking=False):
+        logger.warning(
+            "Skipping scheduled scrape_all_counties() run - a scrape is "
+            "already in progress (manual 'Update All Counties' likely)."
+        )
+        return
     db = SessionLocal()
     try:
         counties = db.query(County).all()
+        _scrape_all_state.update({
+            "running": True,
+            "total": len(counties),
+            "completed": 0,
+            "last_county": None,
+            "last_count": None,
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+        })
         for c in counties:
             try:
-                _scrape_one_county(db, c)
+                result = _scrape_one_county(db, c)
+                records_found = len(result.records) if result and result.records else 0
             except Exception:
                 logger.exception("Scheduled scrape failed for county %s", c.name)
+                records_found = 0
+            _scrape_all_state["completed"] += 1
+            _scrape_all_state["last_county"] = c.name
+            _scrape_all_state["last_count"] = records_found
     finally:
+        _scrape_all_state["running"] = False
+        _scrape_all_state["finished_at"] = datetime.utcnow().isoformat()
         db.close()
+        _scrape_all_lock.release()
 
 
 @app.get("/api/scrape-status")
 def scrape_status(db: Session = Depends(get_db)):
     rows = db.query(County).all()
-    return [
-        {
-            "county": c.name,
-            "last_scraped_at": c.last_scraped_at,
-            "last_scrape_success": c.last_scrape_success,
-            "last_scrape_error": c.last_scrape_error,
-        }
-        for c in rows
-    ]
+    # Phase 1 (2026-07-13): extended from a bare list to {batch, counties} so
+    # the dashboard's "Update All Counties" button can poll batch-in-progress
+    # state (X of 14 counties updated, last county + count) in addition to
+    # the existing per-county last-scrape info. Nothing else in this repo
+    # consumed the old bare-list shape (grepped frontend + tests before
+    # making this change), so this isn't a breaking change in practice.
+    return {
+        "batch": dict(_scrape_all_state),
+        "counties": [
+            {
+                "county": c.name,
+                "last_scraped_at": c.last_scraped_at,
+                "last_scrape_success": c.last_scrape_success,
+                "last_scrape_error": c.last_scrape_error,
+            }
+            for c in rows
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
