@@ -117,6 +117,36 @@ class Property(Base):
     market_conditions = Column(String)  # "buyer_market" | "seller_market" | None
     estimates_last_updated = Column(DateTime)
 
+    # Canonical property-page URLs resolved during the /enrich estimate
+    # lookups (Phase B, 2026-07-13) - only ever set when the corresponding
+    # scraper actually resolved a real detail-page URL via DuckDuckGo/
+    # autocomplete search, never guessed/constructed from the address alone
+    # (see estimate_common.resolve_property_url_via_search's docstring for
+    # why a guessed URL doesn't work on these sites).
+    zillow_url = Column(String)
+    realtor_url = Column(String)
+    redfin_url = Column(String)
+
+    # Zip-level median sale price (Phase B.2) - scraped from the same
+    # Redfin per-zip housing-market page market_conditions.py already
+    # fetches for the buyer's/seller's-market classification, so both
+    # signals come from one page load rather than two.
+    zip_median_sale_price = Column(Float)
+
+    # Location risk data (Phase C, 2026-07-13). Each is null / "unknown -
+    # verify manually" until a real lookup succeeds - never fabricated.
+    crime_grade = Column(String)  # e.g. "A", "B+", "unknown / verify manually"
+    crime_grade_source_url = Column(String)
+    latitude = Column(Float)  # geocoded via Census Geocoder (free, no key)
+    longitude = Column(Float)
+    flood_zone_source = Column(String)  # provenance note for `flood_zone` above
+
+    # Nearby schools (Phase D.2) - list of {name, grade, url} dicts scraped
+    # from niche.com when possible; null/empty if niche.com blocked the
+    # request, in which case the frontend falls back to a link-out.
+    schools_json = Column(JSON)
+    schools_source_url = Column(String)
+
 
 class ScrapeLog(Base):
     __tablename__ = "scrape_logs"

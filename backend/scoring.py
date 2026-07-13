@@ -90,7 +90,31 @@ def get_crime_rate(zip_code: Optional[str]) -> Optional[float]:
         return None
 
 
+# Letter-grade -> normalized [-1, 1] score, worst (F) to best (A+).
+# crimegrade.org's convention (Phase C.1, 2026-07-13): A+ is safest.
+CRIME_GRADE_SCORES = {
+    "A+": 1.0, "A": 0.8, "A-": 0.6,
+    "B+": 0.4, "B": 0.2, "B-": 0.0,
+    "C+": -0.2, "C": -0.4, "C-": -0.6,
+    "D+": -0.7, "D": -0.8, "D-": -0.9,
+    "F": -1.0,
+}
+
+
 def _score_crime_rate(prop) -> Dict[str, Any]:
+    # Prefer the real crimegrade.org letter grade fetched via
+    # GET /api/properties/{id}/enrich (Phase C.1, 2026-07-13) - replaces
+    # the never-provisioned FBI Crime Data API key path below, which stays
+    # only as a fallback for records that haven't been enriched yet.
+    grade = (getattr(prop, "crime_grade", None) or "").strip().upper()
+    if grade and grade in CRIME_GRADE_SCORES:
+        return {
+            "raw_value": grade,
+            "normalized_score": CRIME_GRADE_SCORES[grade],
+            "status": "available",
+            "source": "crimegrade.org",
+        }
+
     zip_code = None
     if prop.address:
         parts = prop.address.strip().split()
@@ -151,10 +175,18 @@ def get_flood_zone_info(address: Optional[str], lat: Optional[float] = None, lng
     return {"flood_zone": "unknown / verify manually", "source": "attempt failed"}
 
 
+FLOOD_ZONE_PLACEHOLDER_VALUES = ("unknown", "unknown / verify manually", "")
+
+
 def _score_flood_zone(prop) -> Dict[str, Any]:
     existing = (prop.flood_zone or "").strip()
-    if existing and existing.lower() not in ("unknown", ""):
-        # High-risk zones per FEMA convention start with A or V.
+    if existing and existing.lower() not in FLOOD_ZONE_PLACEHOLDER_VALUES:
+        # High-risk zones per FEMA convention start with A or V (e.g. "AE",
+        # "VE", "A1-30"); "X" and similar are minimal-risk. A real value
+        # here now normally comes from the live FEMA NFHL lookup in
+        # scrapers/flood_zone.py (Phase C.2, 2026-07-13), triggered via
+        # GET /api/properties/{id}/enrich, rather than only ever being
+        # placeholder text.
         high_risk = existing.upper().startswith(("A", "V"))
         return {
             "raw_value": existing,

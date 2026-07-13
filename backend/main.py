@@ -33,7 +33,9 @@ from scrapers.grantstreet import GrantStreetScraper
 from scrapers.zillow_scraper import get_zillow_estimate
 from scrapers.realtor_scraper import get_realtor_estimate
 from scrapers.redfin_scraper import get_redfin_estimate
-from scrapers.market_conditions import get_market_conditions
+from scrapers.market_conditions import get_market_conditions_and_median_price
+from scrapers.crime_scraper import get_crime_grade
+from scrapers.flood_zone import get_flood_zone
 from scoring import compute_score, compute_ranking_score
 
 logging.basicConfig(level=logging.INFO)
@@ -286,6 +288,17 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "redfin_estimate": prop.redfin_estimate,
         "market_conditions": prop.market_conditions,
         "estimates_last_updated": prop.estimates_last_updated,
+        # Phase B (2026-07-13): canonical estimate-site URLs + zip median price
+        "zillow_url": prop.zillow_url,
+        "realtor_url": prop.realtor_url,
+        "redfin_url": prop.redfin_url,
+        "zip_median_sale_price": prop.zip_median_sale_price,
+        # Phase C (2026-07-13): crime grade, real flood zone lookup, coords
+        "crime_grade": prop.crime_grade,
+        "crime_grade_source_url": prop.crime_grade_source_url,
+        "flood_zone_source": prop.flood_zone_source,
+        "latitude": prop.latitude,
+        "longitude": prop.longitude,
         "is_watchlisted": is_watchlisted,
         "days_to_auction": days_to_auction,
     }
@@ -552,28 +565,66 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
     errors: List[str] = []
 
     try:
-        prop.zillow_estimate = get_zillow_estimate(prop.address)
+        zillow_result = get_zillow_estimate(prop.address)
+        prop.zillow_estimate = zillow_result.get("estimate")
+        prop.zillow_url = zillow_result.get("url")
     except Exception as exc:
         logger.exception("Zillow scraper failed for property %d", property_id)
         errors.append(f"zillow: {exc}")
 
     try:
-        prop.realtor_estimate = get_realtor_estimate(prop.address)
+        realtor_result = get_realtor_estimate(prop.address)
+        prop.realtor_estimate = realtor_result.get("estimate")
+        prop.realtor_url = realtor_result.get("url")
     except Exception as exc:
         logger.exception("Realtor.com scraper failed for property %d", property_id)
         errors.append(f"realtor: {exc}")
 
     try:
-        prop.redfin_estimate = get_redfin_estimate(prop.address)
+        redfin_result = get_redfin_estimate(prop.address)
+        prop.redfin_estimate = redfin_result.get("estimate")
+        prop.redfin_url = redfin_result.get("url")
     except Exception as exc:
         logger.exception("Redfin scraper failed for property %d", property_id)
         errors.append(f"redfin: {exc}")
 
     try:
-        prop.market_conditions = get_market_conditions(prop.county, zip_code)
+        # Phase B.2: market conditions (buyer's/seller's market) and the
+        # zip's median sale price come from one Redfin page fetch.
+        market_result = get_market_conditions_and_median_price(zip_code)
+        prop.market_conditions = market_result.get("market_conditions")
+        prop.zip_median_sale_price = market_result.get("zip_median_sale_price")
     except Exception as exc:
         logger.exception("Market conditions lookup failed for property %d", property_id)
         errors.append(f"market_conditions: {exc}")
+
+    try:
+        # Phase C.1: crimegrade.org zip-level crime grade (replaces the
+        # never-provisioned FBI Crime Data API key approach).
+        crime_result = get_crime_grade(zip_code)
+        if crime_result:
+            prop.crime_grade = crime_result.get("overall") or crime_result.get("violent")
+            prop.crime_grade_source_url = crime_result.get("source_url")
+        else:
+            prop.crime_grade = None
+            prop.crime_grade_source_url = None
+    except Exception as exc:
+        logger.exception("Crime grade lookup failed for property %d", property_id)
+        errors.append(f"crime_grade: {exc}")
+
+    try:
+        # Phase C.2: real FEMA NFHL flood zone lookup (replaces the
+        # always-placeholder previous behavior). Also captures lat/lng so
+        # the frontend can link out to the USFWS Wetlands Mapper centered
+        # on this property.
+        flood_result = get_flood_zone(prop.address)
+        prop.flood_zone = flood_result.get("flood_zone")
+        prop.flood_zone_source = flood_result.get("source")
+        prop.latitude = flood_result.get("latitude")
+        prop.longitude = flood_result.get("longitude")
+    except Exception as exc:
+        logger.exception("Flood zone lookup failed for property %d", property_id)
+        errors.append(f"flood_zone: {exc}")
 
     prop.estimates_last_updated = now
 
