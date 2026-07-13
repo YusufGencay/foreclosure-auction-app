@@ -16,10 +16,10 @@ counties:
 
   - county: Pinellas
     region: Tampa Bay
-    platform: realtaxdeed
-    portal_url: https://pinellas.realtaxdeed.com
+    platform: realforeclose
+    portal_url: https://pinellas.realforeclose.com
     verified: true
-    notes: "Confirmed live. County also runs pinellas.realforeclose.com for mortgage foreclosures; both official per mypinellasclerk.gov. JS SPA."
+    notes: "CORRECTED 2026-07-13: was pointing at pinellas.realtaxdeed.com (tax deed), which live-checked via a real browser has ZERO scheduled sales in July or August 2026 - not a scraper bug, the calendar is genuinely empty (confirmed by paging through both months, no TD/FC markers on any date). Meanwhile pinellas.realforeclose.com (mortgage foreclosure) is a fully active RealAuction calendar with real scheduled sales throughout July 2026 (e.g. 11/11 FC on 07/30/2026, 6/7 FC on 07/14/2026) - confirmed live. Switched primary portal to realforeclose.com so real, current auction volume is actually captured; pinellas.realtaxdeed.com remains official per mypinellasclerk.gov but had nothing to scrape as of this check."
 
   - county: Pasco
     region: Tampa Bay
