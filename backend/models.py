@@ -50,6 +50,17 @@ class Property(Base):
 
     plaintiff_name = Column(String)
     plaintiff_type = Column(String)  # bank/servicer/HOA-COA/tax_cert/private_lender/other
+    # Phase 6 (2026-07-15): where plaintiff_name came from, e.g. "clerk case
+    # docket (hover.hillsclerk.com)" - shown in the UI next to the derived
+    # type so an investor never mistakes an auto-classified guess for a
+    # verified fact. Null whenever plaintiff_name itself is null.
+    plaintiff_source = Column(String)
+    # Best-effort link-out to this property's county clerk case search, so
+    # there's always somewhere real to check by hand even when
+    # plaintiff_name couldn't be resolved automatically (blocked portal,
+    # unsupported county, etc.) - never a guessed URL, see
+    # scrapers/plaintiff_lookup.py's CLERK_CASE_SEARCH_URLS.
+    case_lookup_url = Column(String)
 
     occupancy_status = Column(String)
     lien_priority_status = Column(String)

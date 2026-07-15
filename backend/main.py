@@ -37,6 +37,7 @@ from scrapers.redfin_scraper import get_redfin_estimate
 from scrapers.market_conditions import get_market_conditions_and_median_price
 from scrapers.crime_scraper import get_crime_grade
 from scrapers.flood_zone import get_flood_zone
+from scrapers.plaintiff_lookup import lookup_plaintiff, classify_plaintiff_type, get_case_lookup_url
 from scoring import compute_score, compute_ranking_score, compute_score_explanation
 
 logging.basicConfig(level=logging.INFO)
@@ -278,6 +279,9 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "market_value": prop.market_value,
         "plaintiff_name": prop.plaintiff_name,
         "plaintiff_type": prop.plaintiff_type,
+        # Phase 6 (2026-07-15)
+        "plaintiff_source": prop.plaintiff_source,
+        "case_lookup_url": prop.case_lookup_url,
         "occupancy_status": prop.occupancy_status,
         "lien_priority_status": prop.lien_priority_status,
         "senior_lien_survives": prop.senior_lien_survives,
@@ -683,6 +687,25 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
         logger.exception("Flood zone lookup failed for property %d", property_id)
         errors.append(f"flood_zone: {exc}")
 
+    try:
+        # Phase 6 (2026-07-15): who's foreclosing. Only re-looked-up if we
+        # don't already have a plaintiff_name (case style never changes
+        # once filed, so there's no reason to re-hit the clerk site on
+        # every /enrich re-run the way estimates need refreshing).
+        if not prop.plaintiff_name:
+            plaintiff_result = lookup_plaintiff(prop.county, prop.case_number)
+            plaintiff_name = plaintiff_result.get("plaintiff_name")
+            if plaintiff_name:
+                prop.plaintiff_name = plaintiff_name
+                prop.plaintiff_source = plaintiff_result.get("plaintiff_source")
+                prop.plaintiff_type = classify_plaintiff_type(plaintiff_name)
+            # case_lookup_url is worth keeping current even when no name
+            # was resolved, so the UI always has a real link-out.
+            prop.case_lookup_url = plaintiff_result.get("case_lookup_url") or prop.case_lookup_url
+    except Exception as exc:
+        logger.exception("Plaintiff lookup failed for property %d", property_id)
+        errors.append(f"plaintiff_lookup: {exc}")
+
     prop.estimates_last_updated = now
 
     # Phase 2: recompute composite_score/ranking_score right away so the
@@ -863,6 +886,12 @@ def _upsert_scraped_properties(db: Session, county_name: str, records: List[dict
         prop.assessed_value = rec.get("assessed_value")
         prop.source_url = rec.get("source_url")
         prop.raw_scraped_json = _json_safe(rec)
+        if not prop.case_lookup_url:
+            # Phase 6 (2026-07-15): populate the clerk case-search link-out
+            # immediately at scrape time (not just after /enrich runs) so
+            # every property has somewhere real to check by hand right
+            # away, even before the enrich sweep has ever touched it.
+            prop.case_lookup_url = get_case_lookup_url(county_name)
         prop.is_demo_data = False
         prop.last_scraped_at = datetime.utcnow()
         if is_canceled:
