@@ -138,6 +138,15 @@ class Property(Base):
     realtor_url = Column(String)
     redfin_url = Column(String)
 
+    # Phase 3 (2026-07-15): branded link-out buttons, not scraped estimates
+    # (per the user's explicit 2026-07-13 decision - both sites are
+    # client-rendered SPAs that don't reliably list every county-courthouse
+    # sale, so a scraped "estimate" would be sparse/fragile). Null when no
+    # real listing could be resolved - the frontend falls back to each
+    # site's homepage, never a guessed deep link.
+    federa_url = Column(String)
+    auction_com_url = Column(String)
+
     # Zip-level median sale price (Phase B.2) - scraped from the same
     # Redfin per-zip housing-market page market_conditions.py already
     # fetches for the buyer's/seller's-market classification, so both

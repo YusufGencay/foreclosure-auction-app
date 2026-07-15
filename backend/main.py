@@ -38,6 +38,8 @@ from scrapers.market_conditions import get_market_conditions_and_median_price
 from scrapers.crime_scraper import get_crime_grade
 from scrapers.flood_zone import get_flood_zone
 from scrapers.plaintiff_lookup import lookup_plaintiff, classify_plaintiff_type, get_case_lookup_url
+from scrapers.federa_scraper import get_federa_url, FEDERA_HOMEPAGE
+from scrapers.auction_com_scraper import get_auction_com_url, AUCTION_COM_HOMEPAGE
 from scoring import compute_score, compute_ranking_score, compute_score_explanation
 
 logging.basicConfig(level=logging.INFO)
@@ -334,6 +336,9 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "zillow_url": prop.zillow_url,
         "realtor_url": prop.realtor_url,
         "redfin_url": prop.redfin_url,
+        # Phase 3 (2026-07-15)
+        "federa_url": prop.federa_url,
+        "auction_com_url": prop.auction_com_url,
         "zip_median_sale_price": prop.zip_median_sale_price,
         # Phase C (2026-07-13): crime grade, real flood zone lookup, coords
         "crime_grade": prop.crime_grade,
@@ -705,6 +710,20 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
     except Exception as exc:
         logger.exception("Plaintiff lookup failed for property %d", property_id)
         errors.append(f"plaintiff_lookup: {exc}")
+
+    try:
+        # Phase 3 (2026-07-15): branded link-out buttons - only re-resolved
+        # if we don't already have a real listing URL (like zillow_url,
+        # the listing itself doesn't change once found).
+        if not prop.federa_url:
+            federa_url = get_federa_url(prop.address)
+            prop.federa_url = federa_url or FEDERA_HOMEPAGE
+        if not prop.auction_com_url:
+            auction_url = get_auction_com_url(prop.address)
+            prop.auction_com_url = auction_url or AUCTION_COM_HOMEPAGE
+    except Exception as exc:
+        logger.exception("Federa/Auction.com link resolution failed for property %d", property_id)
+        errors.append(f"federa_auction_links: {exc}")
 
     prop.estimates_last_updated = now
 
