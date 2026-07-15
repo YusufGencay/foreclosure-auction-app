@@ -368,8 +368,21 @@ def list_properties(
 
     sortable_fields = {"ranking_score", "composite_score", "equity_spread", "sale_date", "final_judgment", "market_value", "taxes_owed"}
     if sort_by in sortable_fields:
+        # Phase 4 (2026-07-13) found and fixed a real bug here: the old
+        # `key=lambda d: (d.get(sort_by) is None, ...), reverse=reverse`
+        # approach sorts None to the FRONT whenever reverse=True (desc),
+        # since reverse=True flips the is-None flag's ordering right along
+        # with the value's - the opposite of "unscored properties sort
+        # last" (explicit spec, now directly observable since
+        # ranking_score can genuinely be null for the first time under the
+        # new profit-first formula, whereas the old formula never produced
+        # a null and this bug was dormant). Fixed by always appending
+        # null-valued rows at the end regardless of sort direction.
         reverse = sort_dir == "desc"
-        results.sort(key=lambda d: (d.get(sort_by) is None, d.get(sort_by)), reverse=reverse)
+        non_null = [d for d in results if d.get(sort_by) is not None]
+        null_valued = [d for d in results if d.get(sort_by) is None]
+        non_null.sort(key=lambda d: d.get(sort_by), reverse=reverse)
+        results = non_null + null_valued
 
     total = len(results)
     start = (page - 1) * page_size
