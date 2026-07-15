@@ -37,7 +37,7 @@ from scrapers.redfin_scraper import get_redfin_estimate
 from scrapers.market_conditions import get_market_conditions_and_median_price
 from scrapers.crime_scraper import get_crime_grade
 from scrapers.flood_zone import get_flood_zone
-from scoring import compute_score, compute_ranking_score
+from scoring import compute_score, compute_ranking_score, compute_score_explanation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -284,6 +284,14 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         "ranking_score": prop.ranking_score,
         "component_breakdown": score["component_breakdown"],
         "warnings": score["warnings"],
+        # Phase 4/5 (2026-07-13): profit-first 85/15 formula's full structured
+        # breakdown (profit gap math, location components, warnings) so
+        # ScoreExplainer.jsx can show the investor the exact numbers the
+        # formula used without duplicating it in JS. Computed fresh here
+        # (not stored) since it's cheap - no network calls, unlike the
+        # legacy compute_score() above which can hit FEMA on a placeholder
+        # flood_zone.
+        "score_explanation": compute_score_explanation(prop),
         "zillow_estimate": prop.zillow_estimate,
         "realtor_estimate": prop.realtor_estimate,
         "redfin_estimate": prop.redfin_estimate,
@@ -1085,6 +1093,7 @@ def export_properties(
     records = [_property_to_dict(r, db) for r in rows]
     for r in records:
         r.pop("component_breakdown", None)
+        r.pop("score_explanation", None)
         r["warnings"] = "; ".join(r.get("warnings") or [])
 
     df = pd.DataFrame(records)

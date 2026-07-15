@@ -127,26 +127,47 @@ def _score_crime_rate(prop) -> Dict[str, Any]:
     return {"raw_value": crime_rate, "normalized_score": 0.0, "status": "available"}
 
 
-def _score_lien_priority(prop, warnings: List[str]) -> Dict[str, Any]:
-    penalty_triggered = False
+def _lien_priority_warning_text(prop) -> Optional[str]:
+    """
+    Pure warning-text derivation, no scoring side effects - shared by the
+    legacy compute_score() component below (Phase 4 keeps composite_score/
+    component_breakdown around for the existing detail-view score block)
+    and the new Phase 4 profit-first compute_score_explanation(), which
+    treats lien priority as a warning-only signal that never touches the
+    number (per spec, 2026-07-13 - the investor explicitly chose loud
+    warning badges over score-capping for this).
+    """
     reasons = []
-
-    if (prop.plaintiff_type or "").strip() in ("HOA-COA", "HOA", "COA"):
-        penalty_triggered = True
+    if (getattr(prop, "plaintiff_type", None) or "").strip() in ("HOA-COA", "HOA", "COA"):
         reasons.append("plaintiff is an HOA/COA (junior lienholder; senior liens likely survive the sale)")
-
-    if prop.senior_lien_survives:
-        penalty_triggered = True
+    if getattr(prop, "senior_lien_survives", False):
         reasons.append("senior_lien_survives is True (a superior lien will remain on title after sale)")
+    if not reasons:
+        return None
+    return (
+        "LIEN PRIORITY RISK: " + "; ".join(reasons) +
+        ". This can mean the buyer inherits a mortgage or other senior "
+        "obligation not extinguished by this sale - verify title carefully."
+    )
 
-    if penalty_triggered:
-        warnings.append(
-            "LIEN PRIORITY RISK: " + "; ".join(reasons) +
-            ". This can mean the buyer inherits a mortgage or other senior "
-            "obligation not extinguished by this sale - verify title carefully."
+
+def _bankruptcy_warning_text(prop) -> Optional[str]:
+    """Pure warning-text derivation, no scoring side effects - see
+    _lien_priority_warning_text's docstring for why this is split out."""
+    if getattr(prop, "bankruptcy_flag", False):
+        return (
+            "BANKRUPTCY FLAG: an active or recent bankruptcy filing is "
+            "associated with this property/owner. An automatic stay may "
+            "delay or void this sale - verify case status before bidding."
         )
-        return {"raw_value": True, "normalized_score": LIEN_PRIORITY_PENALTY}
+    return None
 
+
+def _score_lien_priority(prop, warnings: List[str]) -> Dict[str, Any]:
+    text = _lien_priority_warning_text(prop)
+    if text:
+        warnings.append(text)
+        return {"raw_value": True, "normalized_score": LIEN_PRIORITY_PENALTY}
     return {"raw_value": False, "normalized_score": 0.2}
 
 
@@ -210,12 +231,9 @@ def _score_code_liens(prop) -> Dict[str, Any]:
 
 
 def _score_bankruptcy(prop, warnings: List[str]) -> Dict[str, Any]:
-    if prop.bankruptcy_flag:
-        warnings.append(
-            "BANKRUPTCY FLAG: an active or recent bankruptcy filing is "
-            "associated with this property/owner. An automatic stay may "
-            "delay or void this sale - verify case status before bidding."
-        )
+    text = _bankruptcy_warning_text(prop)
+    if text:
+        warnings.append(text)
         return {"raw_value": True, "normalized_score": BANKRUPTCY_PENALTY}
     return {"raw_value": False, "normalized_score": 0.0}
 
@@ -270,115 +288,261 @@ def compute_score(property_row, weights: Dict[str, float]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: 0-100 ranking formula.
+# Phase 4 (2026-07-13): profit-first 85/15 ranking formula, REPLACING the old
+# Phase 2 formula (50% deal quality vs. real estimates + 50% weighted risk
+# component average). This is a separate, investor-facing 0-100 figure from
+# composite_score above (which stays around unbounded/signed for the legacy
+# component-breakdown detail view) - ranking_score is what drives the
+# dashboard's default sort.
 #
-# rank = (deal_quality * 0.5) + (risk_score * 0.5), each sub-score already
-# normalized to 0-100 before combining. This is a separate, investor-facing
-# 0-100 figure from composite_score above (which stays an unbounded,
-# signed weighted sum used for the raw component breakdown/UI warnings) -
-# ranking_score is what drives the dashboard's default sort.
+# Explicit spec from the investor (2026-07-13): the score should heavily
+# prioritize money to be made - final judgment (or opening bid) vs.
+# estimated value, bigger gap = better, 100 = best. Location/schools/crime/
+# flood etc. affect AT MOST 15% of the total. Lien-priority and bankruptcy
+# do NOT affect the number at all anymore - they're warning-only (loud UI
+# badges), a deliberate choice the investor made over score-capping so a
+# single flag can't silently bury an otherwise-great deal in the sort order.
+#
+#   cost_basis   = final_judgment if set else opening_bid
+#   est_value    = avg of available (zillow_estimate, realtor_estimate,
+#                  redfin_estimate) else assessed_value (fallback, labeled)
+#   known_costs  = (taxes_owed or 0) + (code_liens or 0) + (hoa_balance or 0)
+#   profit_gap   = (est_value - cost_basis - known_costs) / est_value
+#   profit_score = clamp(profit_gap, 0, 1) * 100
+#   location_score = 0-100 avg of whichever of {crime_grade, flood_zone,
+#                    market_conditions} have real data - missing components
+#                    are EXCLUDED from the average, not counted as neutral
+#   ranking_score = 0.85 * profit_score + 0.15 * location_score
+#
+# If neither final_judgment nor opening_bid exists, or no est_value source
+# exists at all (no estimates AND no assessed_value), ranking_score is None
+# ("unscored") rather than a fabricated number - the API/UI show "unscored -
+# missing value data" and sort these last. If profit_score is computable but
+# location_score has zero data (typical before /enrich has ever run for a
+# property), the score falls back to profit-only (100% weight on profit)
+# rather than guessing a location figure or leaving 15% of the score blank -
+# this is the same "drop the sub-score, don't guess" pattern the old Phase 2
+# formula used for missing deal-quality data.
 # ---------------------------------------------------------------------------
 
-# Risk-side components pulled from the existing scoring engine's component
-# breakdown. Deliberately excludes equity_spread (deal quality is computed
-# separately below, from real third-party estimates rather than the
-# assessed-value-based market_value field) and absorption_rate (an honest
-# placeholder with no data source, not a risk signal).
-RISK_COMPONENT_KEYS = (
-    "lien_priority",
-    "bankruptcy",
-    "taxes_owed",
-    "code_liens",
-    "flood_zone",
-    "crime_rate",
-)
+PROFIT_WEIGHT = 0.85
+LOCATION_WEIGHT = 0.15
 
 
-def _compute_deal_quality_subscore(prop) -> Optional[float]:
-    """
-    gap = (avg_of_available_estimates - final_judgment) / avg_of_available_estimates
-    A bigger gap (final judgment far below what the property is actually
-    worth) means more built-in equity at the auction price - a better
-    deal - so it's normalized to a HIGHER 0-100 score.
-
-    Uses whichever of zillow_estimate/realtor_estimate/redfin_estimate are
-    actually populated (never fabricates a missing one). Returns None if
-    there isn't at least one real estimate and a final_judgment to compare
-    it against - the caller falls back to risk-score-only in that case,
-    per spec, rather than guessing a deal-quality figure.
-    """
-    estimates = [
-        e for e in (prop.zillow_estimate, prop.realtor_estimate, prop.redfin_estimate)
-        if e is not None and e > 0
-    ]
-    if not estimates:
-        return None
-
+def _get_cost_basis(prop) -> "tuple[Optional[float], Optional[str]]":
     final_judgment = getattr(prop, "final_judgment", None)
-    if final_judgment is None:
-        return None
-
-    avg_estimate = sum(estimates) / len(estimates)
-    if avg_estimate <= 0:
-        return None
-
-    gap = (avg_estimate - final_judgment) / avg_estimate
-    clamped = max(-1.0, min(1.0, gap))
-    return (clamped + 1.0) * 50.0
+    if final_judgment is not None:
+        return final_judgment, "final_judgment"
+    opening_bid = getattr(prop, "opening_bid", None)
+    if opening_bid is not None:
+        return opening_bid, "opening_bid"
+    return None, None
 
 
-def _compute_risk_subscore(component_breakdown: Dict[str, Any]) -> float:
+def _get_estimated_value(prop) -> Dict[str, Any]:
     """
-    Weighted-average the existing scoring engine's risk-related component
-    scores (each already normalized to [-1, 1]) into a single [-1, 1]
-    composite, then rescale to 0-100 where HIGHER = LOWER risk (so it
-    combines intuitively with deal quality - bigger number is always
-    better for both halves of the ranking formula).
-
-    If every risk weight is configured to 0 (an investor could zero them
-    all out via PUT /api/weights), there's no risk signal to weight by, so
-    this returns a neutral 50.0 rather than dividing by zero or guessing.
+    Averages whichever of zillow_estimate/realtor_estimate/redfin_estimate
+    are actually populated and positive (never fabricates a missing one).
+    Falls back to the county assessed_value (clearly labeled) only if none
+    of the three third-party estimates are available - per spec, so a
+    property never goes unscored purely because /enrich hasn't run yet.
     """
-    weighted_sum = 0.0
-    total_weight = 0.0
-    for key in RISK_COMPONENT_KEYS:
-        comp = component_breakdown.get(key)
-        if not comp:
-            continue
-        weight = comp.get("weight", 0.0)
-        if not weight:
-            continue
-        weighted_sum += comp.get("normalized_score", 0.0) * weight
-        total_weight += abs(weight)
+    sources = []
+    values = []
+    for label, val in (
+        ("zillow", getattr(prop, "zillow_estimate", None)),
+        ("realtor", getattr(prop, "realtor_estimate", None)),
+        ("redfin", getattr(prop, "redfin_estimate", None)),
+    ):
+        if val is not None and val > 0:
+            sources.append(label)
+            values.append(val)
 
-    if total_weight == 0:
-        composite = 0.0
+    if values:
+        return {
+            "est_value": sum(values) / len(values),
+            "value_sources": sources,
+            "used_assessed_fallback": False,
+        }
+
+    assessed = getattr(prop, "assessed_value", None)
+    if assessed is not None and assessed > 0:
+        return {
+            "est_value": assessed,
+            "value_sources": ["assessed_value"],
+            "used_assessed_fallback": True,
+        }
+
+    return {"est_value": None, "value_sources": [], "used_assessed_fallback": False}
+
+
+def _compute_profit_gap(prop) -> Dict[str, Any]:
+    cost_basis, cost_basis_source = _get_cost_basis(prop)
+    value_info = _get_estimated_value(prop)
+    est_value = value_info["est_value"]
+    known_costs = (
+        (getattr(prop, "taxes_owed", None) or 0.0)
+        + (getattr(prop, "code_liens", None) or 0.0)
+        + (getattr(prop, "hoa_balance", None) or 0.0)
+    )
+
+    result: Dict[str, Any] = {
+        "cost_basis": cost_basis,
+        "cost_basis_source": cost_basis_source,
+        "est_value": est_value,
+        "value_sources": value_info["value_sources"],
+        "used_assessed_fallback": value_info["used_assessed_fallback"],
+        "known_costs": known_costs,
+        "profit_gap_dollars": None,
+        "profit_gap_pct": None,
+        "profit_score": None,
+    }
+
+    if cost_basis is None or est_value is None or est_value <= 0:
+        return result
+
+    profit_gap_dollars = est_value - cost_basis - known_costs
+    profit_gap_pct = profit_gap_dollars / est_value  # can exceed 1.0 or go negative
+    clamped = max(0.0, min(1.0, profit_gap_pct))  # negative gap -> 0, per spec
+
+    result["profit_gap_dollars"] = profit_gap_dollars
+    result["profit_gap_pct"] = profit_gap_pct
+    result["profit_score"] = clamped * 100.0
+    return result
+
+
+def _compute_location_subscore(prop) -> Dict[str, Any]:
+    """
+    0-100 average of whichever of {crime_grade, flood_zone,
+    market_conditions} actually have real (non-placeholder) data. A
+    component with no data is excluded from the average entirely - it is
+    NOT counted as a neutral/50 value, per spec, since that would silently
+    reward properties with no location data the same as ones confirmed
+    safe.
+    """
+    components: Dict[str, Any] = {}
+
+    grade = (getattr(prop, "crime_grade", None) or "").strip().upper()
+    if grade and grade in CRIME_GRADE_SCORES:
+        components["crime_grade"] = {
+            "raw_value": grade,
+            "score_0_100": (CRIME_GRADE_SCORES[grade] + 1.0) * 50.0,
+            "source": "crimegrade.org",
+        }
+
+    flood = (getattr(prop, "flood_zone", None) or "").strip()
+    if flood and flood.lower() not in FLOOD_ZONE_PLACEHOLDER_VALUES:
+        high_risk = flood.upper().startswith(("A", "V"))
+        components["flood_zone"] = {
+            "raw_value": flood,
+            "score_0_100": 15.0 if high_risk else 85.0,
+            "source": getattr(prop, "flood_zone_source", None) or "FEMA National Flood Hazard Layer (NFHL)",
+        }
+
+    market_conditions = (getattr(prop, "market_conditions", None) or "").strip().lower()
+    if market_conditions in ("buyer_market", "seller_market"):
+        # A buyer's market favors the investor (more negotiating room, softer
+        # comps) - scored favorably; a seller's market is the opposite.
+        components["market_conditions"] = {
+            "raw_value": market_conditions,
+            "score_0_100": 100.0 if market_conditions == "buyer_market" else 0.0,
+            "source": "Redfin (zip-level market classification)",
+        }
+
+    if not components:
+        return {"location_score": None, "components": components}
+
+    avg = sum(c["score_0_100"] for c in components.values()) / len(components)
+    return {"location_score": round(avg, 2), "components": components}
+
+
+def compute_score_explanation(property_row, weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    """
+    Phase 4/5 (2026-07-13): the full structured breakdown behind
+    ranking_score, computed once server-side so Phase 5's
+    ScoreExplainer.jsx can show the investor the EXACT numbers the formula
+    used (which estimate sources were available, whether the
+    assessed-value fallback kicked in, which location components had real
+    data, and the lien-priority/bankruptcy warnings that do NOT affect the
+    number) without ever duplicating the formula in JS.
+
+    `weights` is accepted only so this shares a call signature with the
+    legacy compute_score() below (used to harvest lien/bankruptcy warning
+    text without triggering that function's other, network-calling
+    components) - it has no effect on the 85/15 split, which is fixed per
+    spec, not user-adjustable.
+    """
+    warnings: List[str] = []
+    lien_text = _lien_priority_warning_text(property_row)
+    if lien_text:
+        warnings.append(lien_text)
+    bankruptcy_text = _bankruptcy_warning_text(property_row)
+    if bankruptcy_text:
+        warnings.append(bankruptcy_text)
+
+    profit = _compute_profit_gap(property_row)
+    location = _compute_location_subscore(property_row)
+
+    if profit["profit_score"] is None:
+        if profit["cost_basis"] is None:
+            reason = "unscored - missing value data (no final judgment or opening bid on record)"
+        else:
+            reason = (
+                "unscored - no estimated value available (Zillow/Realtor/Redfin "
+                "estimates and the county assessed value are all missing)"
+            )
+        return {
+            "ranking_score": None,
+            "unscored_reason": reason,
+            "profit": profit,
+            "location": location,
+            "warnings": warnings,
+            "profit_weight": PROFIT_WEIGHT,
+            "location_weight": LOCATION_WEIGHT,
+        }
+
+    profit_score = profit["profit_score"]
+    if location["location_score"] is None:
+        # No location data at all yet (typical pre-/enrich) - fall back to a
+        # profit-only score rather than guessing the missing 15%, same
+        # "drop the sub-score, don't fabricate" pattern the old formula used.
+        ranking_score = profit_score
+        location = dict(location, note=(
+            "no location data yet (crime grade / flood zone / market "
+            "conditions all missing) - score is profit-only until /enrich runs"
+        ))
+        profit_weight_applied, location_weight_applied = 1.0, 0.0
     else:
-        composite = weighted_sum / total_weight
+        ranking_score = PROFIT_WEIGHT * profit_score + LOCATION_WEIGHT * location["location_score"]
+        profit_weight_applied, location_weight_applied = PROFIT_WEIGHT, LOCATION_WEIGHT
 
-    composite = max(-1.0, min(1.0, composite))
-    return (composite + 1.0) * 50.0
+    ranking_score = max(0.0, min(100.0, ranking_score))
+
+    return {
+        "ranking_score": round(ranking_score, 2),
+        "unscored_reason": None,
+        "profit": profit,
+        "location": location,
+        "warnings": warnings,
+        "profit_weight": profit_weight_applied,
+        "location_weight": location_weight_applied,
+    }
 
 
-def compute_ranking_score(property_row, weights: Dict[str, float]) -> float:
+def compute_ranking_score(property_row, weights: Optional[Dict[str, float]] = None) -> Optional[float]:
     """
-    property_row: a Property ORM instance (or any object with the same
-                  attribute names).
-    weights: dict of component_key -> weight (float), the same
-             score_weights-backed dict passed to compute_score().
+    Phase 4 rewrite (2026-07-13): now the profit-first 85/15 formula (see
+    compute_score_explanation() above for the full breakdown and rationale).
+    Returns just the ranking_score float, or None if unscored (missing both
+    a cost basis and any estimated value) - callers that need the full
+    breakdown (e.g. the /enrich endpoint's score_explanation field) should
+    call compute_score_explanation() directly instead of recomputing.
 
-    Returns a 0-100 float: 50% deal quality (real third-party estimates vs.
-    final judgment) + 50% risk (existing lien/bankruptcy/tax/code-lien/
-    flood/crime scoring engine, rescaled). If no third-party estimates are
-    available yet (enrich hasn't run / all three scrapers came back None),
-    the deal-quality half is dropped and the rank is the risk score alone,
-    per spec - never a fabricated deal-quality figure.
+    `weights` is accepted only for backward compatibility with existing call
+    sites (main.py's _rescore_all, the /enrich endpoint) - it is no longer
+    used. The old per-component score_weights table still drives the legacy
+    compute_score()/composite_score above, but the 85/15 profit/location
+    split is fixed per spec, not adjustable via that table (see
+    WeightsPanel.jsx, updated to show this as read-only).
     """
-    score_result = compute_score(property_row, weights)
-    risk_score = _compute_risk_subscore(score_result["component_breakdown"])
-    deal_score = _compute_deal_quality_subscore(property_row)
-
-    if deal_score is None:
-        return round(risk_score, 2)
-
-    return round(deal_score * 0.5 + risk_score * 0.5, 2)
+    return compute_score_explanation(property_row, weights)["ranking_score"]
