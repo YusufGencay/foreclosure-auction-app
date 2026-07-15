@@ -53,6 +53,19 @@ logger = logging.getLogger("scrapers.estimates")
 TIMEOUT_MS = 30_000  # 30 seconds per scraper, per the Phase 1 spec
 MIN_DELAY_SECONDS = 3.0
 
+# Phase 2b (2026-07-15) resolver hardening: a live production test against
+# a real property (see PROJECT_CONTEXT.md, 2026-07-15 session) showed
+# fetch_page_text/fetch_raw_response_text returning None with no exception
+# and no explicit CAPTCHA text detected by _looks_blocked - consistent with
+# a transient network/navigation failure (or a brief soft-block) rather
+# than a permanent one. One retry with a short backoff costs little and
+# recovers from purely transient failures; it deliberately does NOT retry
+# when _looks_blocked already matched real block text, since hammering a
+# page that's actively showing a CAPTCHA is neither polite nor likely to
+# succeed on the very next attempt.
+RETRY_ATTEMPTS = 2
+RETRY_BACKOFF_SECONDS = 4.0
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -91,15 +104,8 @@ def _looks_blocked(text: Optional[str]) -> bool:
     return any(marker in lowered for marker in block_markers)
 
 
-def fetch_page_text(url: str) -> Optional[str]:
-    """
-    Launch a headless Chromium page via Playwright, navigate to `url`, and
-    return the rendered page's visible text content.
-
-    Returns None (never raises) on any failure: playwright not installed,
-    navigation timeout (capped at TIMEOUT_MS), network error, or an
-    apparent bot-block/CAPTCHA interstitial.
-    """
+def _fetch_page_text_once(url: str) -> Optional[str]:
+    """Single attempt - see fetch_page_text for the retry wrapper around this."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -110,8 +116,6 @@ def fetch_page_text(url: str) -> Optional[str]:
             url,
         )
         return None
-
-    _respect_rate_limit()
 
     try:
         with sync_playwright() as p:
@@ -137,16 +141,54 @@ def fetch_page_text(url: str) -> Optional[str]:
         logger.warning("Failed to fetch %s: %s", url, exc)
         return None
 
-    if _looks_blocked(text):
-        logger.warning(
-            "Response from %s looks like a bot-block/CAPTCHA page rather "
-            "than real content; discarding rather than risking a garbage "
-            "parse.",
-            url,
-        )
-        return None
-
     return text
+
+
+def fetch_page_text(url: str) -> Optional[str]:
+    """
+    Launch a headless Chromium page via Playwright, navigate to `url`, and
+    return the rendered page's visible text content.
+
+    Returns None (never raises) on any failure: playwright not installed,
+    navigation timeout (capped at TIMEOUT_MS), network error, or an
+    apparent bot-block/CAPTCHA interstitial.
+
+    Phase 2b (2026-07-15): retries once (RETRY_ATTEMPTS) with a short
+    backoff on a transient failure (exception, empty response) - but NOT
+    when the response came back and _looks_blocked positively matched real
+    CAPTCHA/block text, since that's a confirmed block rather than a blip
+    and retrying immediately just spends more request budget for no
+    expected benefit.
+    """
+    last_text = None
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        _respect_rate_limit()
+        text = _fetch_page_text_once(url)
+        last_text = text
+
+        if text and not _looks_blocked(text):
+            return text
+
+        if text and _looks_blocked(text):
+            logger.warning(
+                "Response from %s looks like a bot-block/CAPTCHA page "
+                "rather than real content; discarding rather than risking "
+                "a garbage parse (not retrying - block looks confirmed).",
+                url,
+            )
+            return None
+
+        if attempt < RETRY_ATTEMPTS:
+            logger.info(
+                "fetch_page_text: attempt %d/%d for %s returned nothing "
+                "usable; retrying in %.0fs.",
+                attempt, RETRY_ATTEMPTS, url, RETRY_BACKOFF_SECONDS,
+            )
+            time.sleep(RETRY_BACKOFF_SECONDS)
+
+    if last_text is None:
+        logger.warning("fetch_page_text: no usable response from %s after %d attempt(s).", url, RETRY_ATTEMPTS)
+    return None
 
 
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/?q={query}"
@@ -226,6 +268,12 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
     navigation) and carries fewer bot-detection signals than a full page
     load. Returns None on any failure - same never-fabricate contract as
     fetch_page_text.
+
+    Phase 2b (2026-07-15): retries once (RETRY_ATTEMPTS) with a short
+    backoff on an empty/failed response, mirroring fetch_page_text's retry
+    behavior - a live production test showed this returning nothing for
+    Redfin's autocomplete endpoint with no exception raised, consistent
+    with a transient failure worth one retry.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -237,23 +285,35 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
         )
         return None
 
-    _respect_rate_limit()
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        _respect_rate_limit()
+        try:
+            with sync_playwright() as p:
+                request_context = p.request.new_context(
+                    user_agent=USER_AGENT, timeout=TIMEOUT_MS
+                )
+                try:
+                    response = request_context.get(url, timeout=TIMEOUT_MS)
+                    text = response.text()
+                finally:
+                    request_context.dispose()
+        except Exception as exc:
+            logger.warning("Failed to fetch %s (attempt %d/%d): %s", url, attempt, RETRY_ATTEMPTS, exc)
+            text = None
 
-    try:
-        with sync_playwright() as p:
-            request_context = p.request.new_context(
-                user_agent=USER_AGENT, timeout=TIMEOUT_MS
+        if text and text.strip():
+            return text
+
+        if attempt < RETRY_ATTEMPTS:
+            logger.info(
+                "fetch_raw_response_text: attempt %d/%d for %s returned "
+                "nothing; retrying in %.0fs.",
+                attempt, RETRY_ATTEMPTS, url, RETRY_BACKOFF_SECONDS,
             )
-            try:
-                response = request_context.get(url, timeout=TIMEOUT_MS)
-                text = response.text()
-            finally:
-                request_context.dispose()
-    except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
-        return None
+            time.sleep(RETRY_BACKOFF_SECONDS)
 
-    return text
+    logger.warning("fetch_raw_response_text: no usable response from %s after %d attempt(s).", url, RETRY_ATTEMPTS)
+    return None
 
 
 def extract_dollar_amount_near_label(text: str, labels: Sequence[str]) -> Optional[float]:
