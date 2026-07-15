@@ -36,7 +36,39 @@ export default function WeightsPanel() {
 
   return (
     <div className="weights-panel">
-      <h3>Score Weight Adjustments</h3>
+      <h3>Ranking Score Weights</h3>
+
+      {/* Phase 4 (2026-07-13): the primary dashboard ranking_score is now a
+          fixed 85% profit-gap / 15% location formula (see PROJECT_CONTEXT.md
+          for the full spec) - it is NOT driven by the per-component sliders
+          below anymore. Showing this read-only, per spec ("expose the 85/15
+          split read-only... don't leave a stale UI lying to the user") so
+          nobody drags a slider expecting it to move the number the
+          dashboard actually sorts by. */}
+      <div className="fixed-split-panel">
+        <div className="fixed-split-row">
+          <span className="fixed-split-label">💰 Profit potential</span>
+          <div className="fixed-split-bar"><div className="fixed-split-fill" style={{ width: "85%" }} /></div>
+          <span className="fixed-split-pct">85%</span>
+        </div>
+        <div className="fixed-split-row">
+          <span className="fixed-split-label">📍 Location (crime / flood / market)</span>
+          <div className="fixed-split-bar"><div className="fixed-split-fill" style={{ width: "15%" }} /></div>
+          <span className="fixed-split-pct">15%</span>
+        </div>
+        <p className="fixed-split-note">
+          This split is fixed, per the investor's explicit spec (2026-07-13): the score should heavily prioritize
+          real profit (estimated value vs. max bid, minus known costs), with location a smaller factor. Lien-priority
+          and bankruptcy flags never affect this number - they show as loud red warning badges instead. Click any
+          property's score to see the exact numbers behind it.
+        </p>
+      </div>
+
+      <h3>Legacy composite score weights</h3>
+      <p className="fixed-split-note">
+        These sliders only affect the older <code>composite_score</code> field (not shown prominently in the UI
+        anymore) - they do not change the ranking_score above or the dashboard's sort order.
+      </p>
       {error && <div className="error-text">{error}</div>}
       {weights.map((w) => (
         <div key={w.key} className="weight-row">

@@ -67,16 +67,35 @@
 .weight-row input[type="number"] { width: 100px; }
 .weight-desc { font-size: 0.75rem; color: #666; margin-top: 2px; }
 
+/* Phase 4 (2026-07-13): fixed 85/15 profit/location split display */
+.fixed-split-panel { background: #f9fafc; border: 1px solid #ddd; border-radius: 6px; padding: 14px; margin-bottom: 16px; }
+.fixed-split-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.fixed-split-label { min-width: 260px; font-weight: 600; font-size: 0.85rem; }
+.fixed-split-bar { flex: 1; height: 10px; background: #e4e6ee; border-radius: 6px; overflow: hidden; }
+.fixed-split-fill { height: 100%; background: #2b5aed; }
+.fixed-split-pct { min-width: 40px; text-align: right; font-weight: 700; font-size: 0.85rem; }
+.fixed-split-note { font-size: 0.78rem; color: #666; margin: 6px 0 0; }
+
 .error-text { color: #d80000; font-weight: bold; margin: 8px 0; }
 
 /* Phase 3: PropertyCard */
 .property-card-v2 { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 14px; cursor: pointer; }
 .property-card-v2-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.rank-badge { font-weight: bold; font-size: 0.95rem; padding: 3px 10px; border-radius: 12px; color: #fff; }
+.rank-badge { font-weight: bold; font-size: 0.95rem; padding: 3px 10px; border-radius: 12px; color: #fff; cursor: pointer; }
 .rank-badge.rank-green { background: #2a9d3d; }
 .rank-badge.rank-yellow { background: #c99a00; }
 .rank-badge.rank-red { background: #d80000; }
 .rank-badge.rank-unknown { background: #888; }
+
+/* Phase 5 (2026-07-13): plain-English score explainer */
+.score-explainer { margin: 8px 0; font-size: 0.85rem; }
+.score-explainer-toggle { background: #f0f2fa; border: 1px solid #2b5aed; color: #1f3ea8; font-weight: 700; font-size: 0.95rem; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+.score-explainer-body { background: #f9fafc; border: 1px solid #ddd; border-radius: 4px; padding: 10px 12px; margin-top: 6px; }
+.score-explainer-line { margin-bottom: 8px; }
+.score-explainer-math { color: #333; margin-top: 2px; }
+.score-explainer-note { color: #777; font-size: 0.78rem; font-style: italic; margin-top: 2px; }
+.score-explainer-warnings { margin: 4px 0 0 18px; padding: 0; color: #7a0000; }
+.score-explainer-disclaimer { font-size: 0.75rem; color: #777; margin-top: 6px; }
 .county-badge { background: #eef0f5; color: #333; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
 .property-card-v2-address { font-weight: 600; margin-bottom: 6px; }
 .property-card-v2-figures { display: flex; gap: 24px; margin-bottom: 6px; }

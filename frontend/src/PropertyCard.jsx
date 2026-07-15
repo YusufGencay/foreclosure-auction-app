@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import WarningBanners from "./WarningBanners.jsx";
+import ScoreExplainer from "./ScoreExplainer.jsx";
 import WatchlistButton from "./WatchlistButton.jsx";
 
 // Reusable property card - used in the calendar's day expansion, the
@@ -24,6 +25,7 @@ export function daysToAuctionClass(days) {
 }
 
 export default function PropertyCard({ property, onClick, onWatchlistChange }) {
+  const [showScore, setShowScore] = useState(false);
   if (!property) return null;
   const rankClass = rankColorClass(property.ranking_score);
   const daysClass = daysToAuctionClass(property.days_to_auction);
@@ -34,7 +36,14 @@ export default function PropertyCard({ property, onClick, onWatchlistChange }) {
       onClick={onClick}
     >
       <div className="property-card-v2-top">
-        <span className={`rank-badge ${rankClass}`}>
+        <span
+          className={`rank-badge ${rankClass}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowScore((v) => !v);
+          }}
+          title="Click for a plain-English score breakdown"
+        >
           {property.ranking_score != null ? `${Math.round(property.ranking_score)}/100` : "—/100"}
         </span>
         <span className="county-badge">{property.county}</span>
@@ -82,6 +91,12 @@ export default function PropertyCard({ property, onClick, onWatchlistChange }) {
       </div>
 
       <WarningBanners property={property} compact />
+
+      {showScore && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ScoreExplainer property={property} defaultExpanded />
+        </div>
+      )}
     </div>
   );
 }

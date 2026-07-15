@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import WarningBanners from "./WarningBanners.jsx";
+import ScoreExplainer from "./ScoreExplainer.jsx";
 import WatchlistButton from "./WatchlistButton.jsx";
 import NotesPad from "./NotesPad.jsx";
 import PreBidChecklist from "./PreBidChecklist.jsx";
@@ -168,9 +169,7 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           <WatchlistButton propertyId={property.id} initialWatchlisted={property.is_watchlisted} onChange={onUpdated} />
         </h2>
 
-        <div className="ranking-badge">
-          Ranking score: {property.ranking_score != null ? property.ranking_score.toFixed(1) : "—"} / 100
-        </div>
+        <ScoreExplainer property={property} defaultExpanded />
 
         <div className="action-row">
           <button onClick={() => setShowChecklist(true)}>Pre-Bid Checklist</button>
@@ -256,9 +255,6 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           Zillow/Realtor.com/Redfin actively block automated browsers, so these can come back "unavailable" even
           after a refresh - this tool never fabricates a number when a site can't be read. Cached for 24h once fetched.
         </p>
-
-        <h3>Score breakdown</h3>
-        <pre className="score-block">{JSON.stringify(property.component_breakdown, null, 2)}</pre>
 
         <div className="link-row">
           <a href={zillowUrl} target="_blank" rel="noreferrer">View on Zillow →</a>
