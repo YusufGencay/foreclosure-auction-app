@@ -50,7 +50,7 @@ export default function App() {
   // Numeric "bigger is better" columns should default to descending on
   // first click (best deals/highest rank first), everything else to
   // ascending (e.g. soonest sale date first).
-  const DESC_FIRST_COLUMNS = new Set(["ranking_score", "equity_spread"]);
+  const DESC_FIRST_COLUMNS = new Set(["ranking_score", "equity_spread", "estimated_value", "profit_gap_dollars"]);
 
   function handleSort(col) {
     if (sortBy === col) {
@@ -130,6 +130,8 @@ export default function App() {
                   <th onClick={() => handleSort("county")}>County {sortBy === "county" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("sale_date")}>Sale Date {sortBy === "sale_date" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th>Address</th>
+                  <th onClick={() => handleSort("estimated_value")}>Est. Value {sortBy === "estimated_value" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th onClick={() => handleSort("profit_gap_dollars")}>Profit Gap {sortBy === "profit_gap_dollars" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("equity_spread")}>Equity Spread {sortBy === "equity_spread" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("plaintiff_type")}>Plaintiff Type {sortBy === "plaintiff_type" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("occupancy_status")}>Occupancy {sortBy === "occupancy_status" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
@@ -145,6 +147,16 @@ export default function App() {
                     <td>{p.county} {p.is_demo_data && <span className="sample-tag-sm">DEMO</span>}</td>
                     <td>{p.sale_date ? new Date(p.sale_date).toLocaleDateString() : "—"}</td>
                     <td>{p.address || "—"}</td>
+                    <td title={p.used_assessed_fallback ? "No Zillow/Realtor/Redfin estimate yet - using county assessed value as a fallback" : ""}>
+                      {p.estimated_value != null
+                        ? `$${Math.round(p.estimated_value).toLocaleString()}${p.used_assessed_fallback ? " *" : ""}`
+                        : "unknown / verify manually"}
+                    </td>
+                    <td>
+                      {p.profit_gap_dollars != null
+                        ? `$${Math.round(p.profit_gap_dollars).toLocaleString()}${p.profit_gap_pct != null ? ` (${Math.round(p.profit_gap_pct * 100)}%)` : ""}`
+                        : "—"}
+                    </td>
                     <td>{p.equity_spread != null ? `$${Math.round(p.equity_spread).toLocaleString()}` : "—"}</td>
                     <td>{p.plaintiff_type || "—"}</td>
                     <td>{p.occupancy_status || "—"}</td>
