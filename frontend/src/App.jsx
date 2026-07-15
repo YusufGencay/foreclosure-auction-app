@@ -133,7 +133,7 @@ export default function App() {
                   <th onClick={() => handleSort("estimated_value")}>Est. Value {sortBy === "estimated_value" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("profit_gap_dollars")}>Profit Gap {sortBy === "profit_gap_dollars" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("equity_spread")}>Equity Spread {sortBy === "equity_spread" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                  <th onClick={() => handleSort("plaintiff_type")}>Plaintiff Type {sortBy === "plaintiff_type" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th onClick={() => handleSort("plaintiff_type")}>Plaintiff {sortBy === "plaintiff_type" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th onClick={() => handleSort("occupancy_status")}>Occupancy {sortBy === "occupancy_status" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                   <th>Auction Status</th>
                   <th>Flags</th>
@@ -158,7 +158,15 @@ export default function App() {
                         : "—"}
                     </td>
                     <td>{p.equity_spread != null ? `$${Math.round(p.equity_spread).toLocaleString()}` : "—"}</td>
-                    <td>{p.plaintiff_type || "—"}</td>
+                    <td title={p.plaintiff_source || ""}>
+                      {p.plaintiff_name ? (
+                        <>{p.plaintiff_name}{p.plaintiff_type ? ` (${p.plaintiff_type})` : ""}</>
+                      ) : p.case_lookup_url ? (
+                        <a href={p.case_lookup_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>look up case ↗</a>
+                      ) : (
+                        "unknown / verify manually"
+                      )}
+                    </td>
                     <td>{p.occupancy_status || "—"}</td>
                     <td>
                       {p.auction_status === "canceled" ? (

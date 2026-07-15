@@ -201,7 +201,30 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           <div><strong>Opening bid:</strong> {property.opening_bid != null ? `$${property.opening_bid.toLocaleString()}` : "—"}</div>
           <div><strong>Assessed value:</strong> {property.assessed_value != null ? `$${property.assessed_value.toLocaleString()}` : "—"}</div>
           <div><strong>Market value:</strong> {property.market_value != null ? `$${property.market_value.toLocaleString()}` : "—"}</div>
-          <div><strong>Plaintiff:</strong> {property.plaintiff_name || "—"} ({property.plaintiff_type || "—"})</div>
+          <div>
+            <strong>Plaintiff:</strong>{" "}
+            {property.plaintiff_name ? (
+              <>
+                {property.plaintiff_name}
+                {property.plaintiff_type && (
+                  <span> ({property.plaintiff_type}{property.plaintiff_type === "other" ? "" : " (auto-classified from name)"})</span>
+                )}
+                {property.plaintiff_source && (
+                  <span style={{ fontSize: "0.75rem", color: "#666" }}> — {property.plaintiff_source}</span>
+                )}
+              </>
+            ) : (
+              <>
+                unknown / verify manually
+                {property.case_lookup_url && (
+                  <>
+                    {" "}
+                    <a href={property.case_lookup_url} target="_blank" rel="noreferrer">look up case ↗</a>
+                  </>
+                )}
+              </>
+            )}
+          </div>
           <div><strong>Occupancy:</strong> {property.occupancy_status || "—"}</div>
           <div><strong>Lien priority status:</strong> {property.lien_priority_status || "—"}</div>
           <div><strong>Senior lien survives:</strong> {String(property.senior_lien_survives)}</div>

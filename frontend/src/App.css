@@ -98,6 +98,8 @@
 .score-explainer-disclaimer { font-size: 0.75rem; color: #777; margin-top: 6px; }
 .county-badge { background: #eef0f5; color: #333; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
 .property-card-v2-address { font-weight: 600; margin-bottom: 6px; }
+.property-card-v2-plaintiff { font-size: 0.8rem; color: #444; margin-bottom: 6px; }
+.property-card-v2-plaintiff .figure-label { display: inline; }
 .property-card-v2-figures { display: flex; gap: 24px; margin-bottom: 6px; }
 .figure-label { display: block; font-size: 0.7rem; color: #777; }
 .figure-value { display: block; font-size: 0.9rem; font-weight: 600; }

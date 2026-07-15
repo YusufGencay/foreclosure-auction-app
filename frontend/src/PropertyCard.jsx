@@ -57,6 +57,17 @@ export default function PropertyCard({ property, onClick, onWatchlistChange }) {
 
       <div className="property-card-v2-address">{property.address || "(no address)"}</div>
 
+      <div className="property-card-v2-plaintiff" title={property.plaintiff_source || ""}>
+        <span className="figure-label">Plaintiff</span>{" "}
+        {property.plaintiff_name ? (
+          <span>{property.plaintiff_name}{property.plaintiff_type ? ` (${property.plaintiff_type})` : ""}</span>
+        ) : property.case_lookup_url ? (
+          <a href={property.case_lookup_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>look up case ↗</a>
+        ) : (
+          <span>unknown / verify manually</span>
+        )}
+      </div>
+
       <div className="property-card-v2-figures">
         <div>
           <span className="figure-label">Final judgment</span>
