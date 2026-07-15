@@ -110,7 +110,10 @@ def on_startup():
     if not scheduler.running:
         _register_scheduler_jobs()
         scheduler.start()
-        logger.info("Scheduler started: scrape-all jobs registered for 06:00 and 18:00.")
+        logger.info(
+            "Scheduler started: scrape-all jobs registered for 06:00 and 18:00; "
+            "enrich_sweep registered every %d minutes.", ENRICH_SWEEP_INTERVAL_MINUTES,
+        )
 
 
 @app.on_event("shutdown")
@@ -141,6 +144,20 @@ def _register_scheduler_jobs():
         hour=18,
         minute=0,
         id="scrape_all_6pm",
+        replace_existing=True,
+    )
+    # Phase 2c (2026-07-15): background enrich-sweep so investors see
+    # estimated value / profit gap numbers on the dashboard without having
+    # to open each property's detail page first (which is what previously
+    # triggered enrichment). Runs every ENRICH_SWEEP_INTERVAL_MINUTES,
+    # bounded to ENRICH_SWEEP_BATCH_SIZE properties per tick so it never
+    # turns into an unbounded background hammering of Zillow/Realtor.com/
+    # Redfin - same "polite, rate-limited" intent as the county scrapers.
+    scheduler.add_job(
+        enrich_sweep,
+        "interval",
+        minutes=ENRICH_SWEEP_INTERVAL_MINUTES,
+        id="enrich_sweep",
         replace_existing=True,
     )
 
@@ -239,6 +256,8 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
     days_to_auction = None
     if prop.sale_date:
         days_to_auction = (prop.sale_date.date() - datetime.utcnow().date()).days
+    _score_explanation = compute_score_explanation(prop)
+    _profit = _score_explanation.get("profit") or {}
     return {
         "id": prop.id,
         "case_number": prop.case_number,
@@ -291,7 +310,17 @@ def _property_to_dict(prop: Property, db: Session) -> dict:
         # (not stored) since it's cheap - no network calls, unlike the
         # legacy compute_score() above which can hit FEMA on a placeholder
         # flood_zone.
-        "score_explanation": compute_score_explanation(prop),
+        "score_explanation": _score_explanation,
+        # Phase 2d (2026-07-15): top-level convenience mirrors of
+        # score_explanation["profit"]'s estimated value / profit gap so the
+        # dashboard's dense table can show and sort by them as first-class
+        # columns without the frontend reaching into the nested breakdown.
+        # None whenever the underlying profit calc is None (missing cost
+        # basis or missing value data) - never a fabricated number.
+        "estimated_value": _profit.get("est_value"),
+        "profit_gap_dollars": _profit.get("profit_gap_dollars"),
+        "profit_gap_pct": _profit.get("profit_gap_pct"),
+        "used_assessed_fallback": _profit.get("used_assessed_fallback"),
         "zillow_estimate": prop.zillow_estimate,
         "realtor_estimate": prop.realtor_estimate,
         "redfin_estimate": prop.redfin_estimate,
@@ -366,7 +395,13 @@ def list_properties(
 
     results = [_property_to_dict(r, db) for r in rows]
 
-    sortable_fields = {"ranking_score", "composite_score", "equity_spread", "sale_date", "final_judgment", "market_value", "taxes_owed"}
+    sortable_fields = {
+        "ranking_score", "composite_score", "equity_spread", "sale_date", "final_judgment",
+        "market_value", "taxes_owed",
+        # Phase 2d (2026-07-15): let the dense table sort by the new
+        # first-class estimate/profit-gap columns too.
+        "estimated_value", "profit_gap_dollars",
+    }
     if sort_by in sortable_fields:
         # Phase 4 (2026-07-13) found and fixed a real bug here: the old
         # `key=lambda d: (d.get(sort_by) is None, ...), reverse=reverse`
@@ -663,6 +698,76 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
     result["enrich_errors"] = errors
     result["enrich_cached"] = False
     return result
+
+
+ENRICH_SWEEP_BATCH_SIZE = 15
+ENRICH_SWEEP_INTERVAL_MINUTES = 30
+_enrich_sweep_lock = threading.Lock()
+
+
+def enrich_sweep():
+    """
+    Phase 2c (2026-07-15) background job (see _register_scheduler_jobs).
+
+    Proactively runs the same enrich_property() logic (Zillow/Realtor.com/
+    Redfin estimates + crime/flood/market-conditions) against upcoming
+    properties that have never been enriched, or whose estimates are
+    stale (older than ENRICH_CACHE_HOURS) - so the dashboard's Est. Value /
+    Profit Gap columns (Phase 2d) are populated without an investor having
+    to open every single detail page first.
+
+    Design notes:
+    - Only considers properties with a future sale_date and a real address
+      - no point spending a Zillow/Redfin request budget on an auction
+        that's already happened or one we can't even resolve an address
+        for.
+    - Bounded to ENRICH_SWEEP_BATCH_SIZE per tick, ordered oldest-enriched
+      (or never-enriched) first, so a large backlog drains gradually over
+      many ticks instead of firing a big burst of requests at once.
+    - Non-reentrant (_enrich_sweep_lock): if a previous sweep is still
+      running when the next interval fires, this tick is skipped rather
+      than piling up concurrent sweeps.
+    - Same never-fabricate contract as the on-demand endpoint: a property
+      whose scrapers all fail (bot-blocked, no match, etc.) just keeps its
+      existing null estimate fields - errors are logged, never guessed
+      around.
+    """
+    if not _enrich_sweep_lock.acquire(blocking=False):
+        logger.info("enrich_sweep: a previous sweep is still running; skipping this tick.")
+        return
+    try:
+        db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(hours=ENRICH_CACHE_HOURS)
+            candidates = (
+                db.query(Property)
+                .filter(Property.sale_date.isnot(None))
+                .filter(Property.sale_date >= datetime.utcnow())
+                .filter(Property.address.isnot(None))
+                .filter(
+                    (Property.estimates_last_updated.is_(None))
+                    | (Property.estimates_last_updated < cutoff)
+                )
+                # SQLite sorts NULLs first on ASC by default, which is what
+                # we want here: never-enriched properties take priority
+                # over ones that are merely stale.
+                .order_by(Property.estimates_last_updated.asc())
+                .limit(ENRICH_SWEEP_BATCH_SIZE)
+                .all()
+            )
+            if not candidates:
+                logger.info("enrich_sweep: no properties due for enrichment this tick.")
+                return
+            logger.info("enrich_sweep: enriching %d propert(y/ies).", len(candidates))
+            for prop in candidates:
+                try:
+                    enrich_property(prop.id, db)
+                except Exception:
+                    logger.exception("enrich_sweep: failed to enrich property %d", prop.id)
+        finally:
+            db.close()
+    finally:
+        _enrich_sweep_lock.release()
 
 
 # ---------------------------------------------------------------------------
