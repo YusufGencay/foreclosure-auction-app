@@ -101,6 +101,17 @@ export default function PropertyCard({ property, onClick, onWatchlistChange }) {
         )}
       </div>
 
+      {/* Phase 3 (2026-07-15): compact branded link-outs - always a real
+          resolved listing or each site's homepage, never a guessed link. */}
+      <div className="link-row brand-link-row brand-link-row-compact" onClick={(e) => e.stopPropagation()}>
+        <a className="brand-btn federa-btn" href={property.federa_url || "https://federa.com/"} target="_blank" rel="noreferrer">
+          Federa →
+        </a>
+        <a className="brand-btn auction-com-btn" href={property.auction_com_url || "https://www.auction.com/"} target="_blank" rel="noreferrer">
+          Auction.com →
+        </a>
+      </div>
+
       <WarningBanners property={property} compact />
 
       {showScore && (

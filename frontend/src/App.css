@@ -51,6 +51,45 @@
 .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 0.85rem; margin: 12px 0; }
 .score-block { background: #f5f5f5; padding: 8px; font-size: 0.75rem; overflow-x: auto; }
 .link-row { display: flex; gap: 16px; margin: 8px 0; }
+
+/* Phase 3 (2026-07-15): branded Federa/Auction.com link-out buttons.
+   Federa's colors were sampled live from the real rendered site (its
+   active nav item and "Make an offer" button both compute to
+   rgb(15,41,29) = #0F291D, matching its own <meta name="theme-color">) -
+   a white/transparent background with a dark-green border+text, not a
+   solid fill, matching what the real site actually looks like.
+   Auction.com's colors were NOT independently sampled this session - the
+   site is walled behind an Imperva/hCaptcha challenge on every page load
+   (confirmed live, screenshotted), and this project does not automate
+   past CAPTCHAs on principle. The navy/orange-accent values below are
+   carried over from the spec's own suggested starting point, not
+   verified against the live DOM - flagged here honestly rather than
+   presented as sampled. */
+.brand-link-row { gap: 10px; }
+.brand-link-row-compact { margin: 6px 0; gap: 8px; }
+.brand-btn {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1.5px solid transparent;
+}
+.federa-btn {
+  background: #fff;
+  color: #0F291D;
+  border-color: #0F291D;
+}
+.federa-btn:hover { background: #0F291D; color: #fff; }
+.auction-com-btn {
+  /* Not live-sampled this session (see comment above) - spec's suggested
+     navy + orange-accent starting point. */
+  background: #0A1F44;
+  color: #fff;
+  border-color: #0A1F44;
+}
+.auction-com-btn:hover { background: #ff7a00; border-color: #ff7a00; color: #0A1F44; }
 .action-row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
 .action-row button.active { background: #2b5aed; color: #fff; }
 .title-result { background: #f0f0f0; padding: 6px; border-radius: 4px; margin: 6px 0; font-size: 0.8rem; }

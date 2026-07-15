@@ -285,6 +285,30 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
           {redfinUrl && <a href={redfinUrl} target="_blank" rel="noreferrer">View on Redfin →</a>}
         </div>
 
+        {/* Phase 3 (2026-07-15): branded link-outs, not scraped estimates
+            (per the 2026-07-13 decision - neither site reliably lists
+            every county-courthouse sale). federa_url/auction_com_url are
+            real resolved listing pages when /enrich found one, else each
+            site's homepage - never a guessed deep link. */}
+        <div className="link-row brand-link-row">
+          <a
+            className="brand-btn federa-btn"
+            href={property.federa_url || "https://federa.com/"}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View on Federa →
+          </a>
+          <a
+            className="brand-btn auction-com-btn"
+            href={property.auction_com_url || "https://www.auction.com/"}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View on Auction.com →
+          </a>
+        </div>
+
         <h3>Location risk</h3>
         <div className="detail-grid">
           <div>
