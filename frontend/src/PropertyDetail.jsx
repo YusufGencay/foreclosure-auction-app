@@ -63,12 +63,27 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
   // Prefer the real canonical detail-page URL resolved server-side during
   // /enrich (Phase B.1, 2026-07-13: property.zillow_url/realtor_url/
   // redfin_url, only ever set when the scraper actually confirmed a real
-  // matching page - see zillow_scraper.py etc.). Fall back to a generic
-  // address-search link (which was always guessed, never guaranteed to
-  // land on the right property) only if enrich hasn't run yet.
-  const zillowUrl = property.zillow_url || `https://www.zillow.com/homes/${encodeURIComponent(property.address || "")}_rb/`;
-  const realtorUrl = property.realtor_url || `https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(property.address || "")}`;
-  const redfinUrl = property.redfin_url || null;
+  // matching page - see zillow_scraper.py etc.).
+  //
+  // 2026-07-16 UPDATE: a user reported these buttons always land on each
+  // site's bare homepage. Root cause: the old fallback guessed a URL
+  // pattern directly from the address (e.g. zillow.com/homes/<address>_rb/)
+  // that zillow_scraper.py's own docstring already documented as broken -
+  // Zillow requires an internal zpid it can't be guessed, so that pattern
+  // silently redirects to a generic, unrelated search page. Replaced the
+  // guess with a real DuckDuckGo search link (not a guess - it actually
+  // returns live results for the address on the target site) and made the
+  // button label honest about which case it is ("View" for a confirmed
+  // direct hit vs. "Search" for the fallback), instead of presenting a
+  // dead-end guess as if it were a real property link.
+  const ddgSearchUrl = (domain, address) =>
+    `https://duckduckgo.com/?q=${encodeURIComponent(`site:${domain} ${address || ""}`)}`;
+  const zillowUrl = property.zillow_url || ddgSearchUrl("zillow.com", property.address);
+  const zillowIsDirect = Boolean(property.zillow_url);
+  const realtorUrl = property.realtor_url || ddgSearchUrl("realtor.com", property.address);
+  const realtorIsDirect = Boolean(property.realtor_url);
+  const redfinUrl = property.redfin_url || ddgSearchUrl("redfin.com", property.address);
+  const redfinIsDirect = Boolean(property.redfin_url);
 
   // Phase D.1 (2026-07-13): best-effort pre-filled link to propertyscout.io's
   // public address-search page. propertyscout.io's actual search form is a
@@ -280,16 +295,20 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
         </p>
 
         <div className="link-row">
-          <a href={zillowUrl} target="_blank" rel="noreferrer">View on Zillow →</a>
-          <a href={realtorUrl} target="_blank" rel="noreferrer">View on Realtor.com →</a>
-          {redfinUrl && <a href={redfinUrl} target="_blank" rel="noreferrer">View on Redfin →</a>}
+          <a href={zillowUrl} target="_blank" rel="noreferrer">{zillowIsDirect ? "View on Zillow →" : "Search Zillow →"}</a>
+          <a href={realtorUrl} target="_blank" rel="noreferrer">{realtorIsDirect ? "View on Realtor.com →" : "Search Realtor.com →"}</a>
+          <a href={redfinUrl} target="_blank" rel="noreferrer">{redfinIsDirect ? "View on Redfin →" : "Search Redfin →"}</a>
         </div>
 
         {/* Phase 3 (2026-07-15): branded link-outs, not scraped estimates
             (per the 2026-07-13 decision - neither site reliably lists
             every county-courthouse sale). federa_url/auction_com_url are
             real resolved listing pages when /enrich found one, else each
-            site's homepage - never a guessed deep link. */}
+            site's homepage - never a guessed deep link.
+            2026-07-16: label is now honest about which case it is - "View"
+            only when a real listing was resolved, "Search" (homepage) when
+            it wasn't, so the button never implies a direct link it can't
+            deliver. */}
         <div className="link-row brand-link-row">
           <a
             className="brand-btn federa-btn"
@@ -297,7 +316,7 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
             target="_blank"
             rel="noreferrer"
           >
-            View on Federa →
+            {property.federa_url ? "View on Federa →" : "Search Federa →"}
           </a>
           <a
             className="brand-btn auction-com-btn"
@@ -305,7 +324,7 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
             target="_blank"
             rel="noreferrer"
           >
-            View on Auction.com →
+            {property.auction_com_url ? "View on Auction.com →" : "Search Auction.com →"}
           </a>
         </div>
 
