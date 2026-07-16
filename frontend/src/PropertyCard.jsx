@@ -102,13 +102,22 @@ export default function PropertyCard({ property, onClick, onWatchlistChange }) {
       </div>
 
       {/* Phase 3 (2026-07-15): compact branded link-outs - always a real
-          resolved listing or each site's homepage, never a guessed link. */}
+          resolved listing or each site's homepage, never a guessed link.
+          2026-07-16: a user reported these always land on the bare
+          homepage - true, because this card view had never been updated
+          with the honest View/Search label distinction added to
+          PropertyDetail.jsx (it always said "Federa →" / "Auction.com →"
+          even when it was really just the homepage). Fixed to match: only
+          says "View on..." when a real listing was resolved (federa_url/
+          auction_com_url set to something other than the bare homepage
+          constant), "Search..." otherwise, so the button is never
+          misleading about what it actually links to. */}
       <div className="link-row brand-link-row brand-link-row-compact" onClick={(e) => e.stopPropagation()}>
         <a className="brand-btn federa-btn" href={property.federa_url || "https://federa.com/"} target="_blank" rel="noreferrer">
-          Federa →
+          {property.federa_url && property.federa_url !== "https://federa.com/" ? "View on Federa →" : "Search Federa →"}
         </a>
         <a className="brand-btn auction-com-btn" href={property.auction_com_url || "https://www.auction.com/"} target="_blank" rel="noreferrer">
-          Auction.com →
+          {property.auction_com_url && property.auction_com_url !== "https://www.auction.com/" ? "View on Auction.com →" : "Search Auction.com →"}
         </a>
       </div>
 
