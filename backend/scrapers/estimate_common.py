@@ -220,6 +220,22 @@ def resolve_property_url_via_search(
 
     Returns None if no matching URL is found in the search results or the
     search request itself fails (never fabricates a listing URL/ID).
+
+    2026-07-16 UPDATE: a user reported that none of the branded links ever
+    reach the actual property - live-testing this function's search results
+    in a real Chrome session (query: "site:zillow.com 17915 Saint Croix Isle
+    Dr Tampa FL 33647") showed DuckDuckGo is reachable and returns real
+    results, but the FIRST regex match in the page text is not necessarily
+    the right listing - nearby/similar addresses ("17912 Saint Croix Isle
+    Dr", "17915 Saint Croix Dr" with a different zip and no "Isle") also
+    matched the URL pattern and could easily have been picked instead of the
+    exact address requested. Grabbing "the first match" was a real accuracy
+    bug: it could silently link to a nearby but WRONG property. Fixed by
+    scanning every candidate match and only accepting one whose surrounding
+    result text actually contains the input address's house number - if no
+    candidate's context contains that house number, this now returns None
+    (never guesses a nearby address) rather than silently picking a
+    plausible-looking but wrong listing.
     """
     if not address or not address.strip():
         return None
@@ -236,10 +252,38 @@ def resolve_property_url_via_search(
     if _looks_blocked(text):
         return None
 
-    match = re.search(url_pattern, text)
-    if not match:
+    house_number_match = re.match(r"\s*(\d+)", address.strip())
+    house_number = house_number_match.group(1) if house_number_match else None
+
+    candidates = list(re.finditer(url_pattern, text))
+    if not candidates:
         return None
-    return "https://" + match.group(0)
+
+    if not house_number:
+        # No leading house number to verify against (unusual address
+        # format) - fall back to the previous "first match" behavior rather
+        # than refusing outright.
+        return "https://" + candidates[0].group(0)
+
+    for m in candidates:
+        # DuckDuckGo's html results place each result's title/snippet text
+        # right around its URL, and that snippet virtually always repeats
+        # the property's street address - checking a window of text
+        # immediately preceding the URL match for the exact house number is
+        # a cheap, effective way to confirm this candidate is for the right
+        # property rather than a same-street or same-number-elsewhere
+        # neighbor.
+        window = text[max(0, m.start() - 300):m.end()]
+        if re.search(rf"\b{re.escape(house_number)}\b", window):
+            return "https://" + m.group(0)
+
+    logger.info(
+        "resolve_property_url_via_search: found %d candidate URL(s) on %s "
+        "for %r but none had house number %r in their nearby result text - "
+        "refusing to guess a nearby-but-possibly-wrong listing.",
+        len(candidates), domain, address, house_number,
+    )
+    return None
 
 
 def fetch_raw_response_text(url: str) -> Optional[str]:

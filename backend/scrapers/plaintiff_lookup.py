@@ -115,24 +115,29 @@ CLERK_CASE_SEARCH_URLS = {
     # number search tab, not just the homepage.
     "Hillsborough": "https://hover.hillsclerk.com/html/case/caseSearch.html#nav-CaseNumber-tab",
     "Orange": "https://myeclerk.myorangeclerk.com/",
-    # Domains below are the clerk sites config/counties.yaml already
-    # confirmed live in a previous session (see each county's `notes`
-    # field) - homepage-level only, since this session did not verify a
-    # specific case-search sub-path for these the way it did for
-    # Hillsborough/Orange above. Better an honest homepage link than a
-    # guessed deep-link path that might 404.
-    "Pinellas": "https://www.mypinellasclerk.gov/",
-    "Pasco": "https://www.pascoclerk.com/",
-    "Hernando": "https://www.hernandoclerk.com/",
-    "Manatee": "https://www.manateeclerk.com/",
-    "Sarasota": "https://www.sarasotaclerk.com/",
-    "Osceola": "https://www.osceolaclerk.com/",
-    "Seminole": "https://www.seminoleclerk.org/",
-    "Polk": "https://www.polkclerkfl.gov/",
-    "Lake": "https://www.lakecountyclerk.org/",
-    "Volusia": "https://www.clerk.org/",
-    "Brevard": "https://www.brevardclerk.us/",
-    "Marion": "https://www.marioncountyclerk.org/",
+    # 2026-07-16 UPDATE: the domains below were previously bare homepages
+    # (carried over from a prior session's config notes, never verified to
+    # have a real case-search sub-path). A user reported "not even the case
+    # file link works" - live-verified via real Chrome DOM inspection this
+    # session (walked each site's actual <a> tags looking for a genuine
+    # case/court-record search link, not guessed) and replaced every one
+    # below with the real deep link found on the site itself. These still
+    # land on a search FORM (not a pre-filled result - none of these portals
+    # accept a query-string case number), but that's a real step closer than
+    # a bare homepage, and every domain+path was confirmed live (200, correct
+    # content) during this pass.
+    "Pinellas": "https://www.mypinellasclerk.gov/View-Records",
+    "Pasco": "https://www.pascoclerk.com/172/Search-Court-Records",
+    "Hernando": "https://www.civitekflorida.com/ocrs/county/27/",
+    "Manatee": "https://records.manateeclerk.com/CourtRecords/Search",
+    "Sarasota": "https://www.sarasotaclerk.com/Records/Court-Records/Search-for-Court-Case",
+    "Osceola": "https://courts.osceolaclerk.com/BenchmarkWeb/Home.aspx/Search",
+    "Seminole": "https://www.seminoleclerk.org/search-for-a-court-case/",
+    "Polk": "https://www.polkclerkfl.gov/297",
+    "Lake": "https://www.lakecountyclerkfl.gov/departments/courts-management/court-data-records-division/search-online-court-records/",
+    "Volusia": "https://www.clerk.org/Search-Records.aspx",
+    "Brevard": "https://www.brevardclerk.us/case-search_1",
+    "Marion": "https://www.civitekflorida.com/ocrs/county/42/",
 }
 
 
