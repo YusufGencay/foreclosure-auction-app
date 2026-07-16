@@ -308,7 +308,15 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
             2026-07-16: label is now honest about which case it is - "View"
             only when a real listing was resolved, "Search" (homepage) when
             it wasn't, so the button never implies a direct link it can't
-            deliver. */}
+            deliver.
+            IMPORTANT: backend/main.py's enrich_property sets federa_url/
+            auction_com_url to the literal homepage string on failure
+            (never null once /enrich has run - see FEDERA_HOMEPAGE/
+            AUCTION_COM_HOMEPAGE), unlike zillow_url/realtor_url/redfin_url
+            which stay null on failure. So this must compare against the
+            homepage constant, not just check truthiness - a plain
+            `property.federa_url ?` would say "View on Federa" even when
+            it's really just the bare homepage. */}
         <div className="link-row brand-link-row">
           <a
             className="brand-btn federa-btn"
@@ -316,7 +324,7 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
             target="_blank"
             rel="noreferrer"
           >
-            {property.federa_url ? "View on Federa →" : "Search Federa →"}
+            {property.federa_url && property.federa_url !== "https://federa.com/" ? "View on Federa →" : "Search Federa →"}
           </a>
           <a
             className="brand-btn auction-com-btn"
@@ -324,7 +332,7 @@ export default function PropertyDetail({ propertyId, onClose, onUpdated }) {
             target="_blank"
             rel="noreferrer"
           >
-            {property.auction_com_url ? "View on Auction.com →" : "Search Auction.com →"}
+            {property.auction_com_url && property.auction_com_url !== "https://www.auction.com/" ? "View on Auction.com →" : "Search Auction.com →"}
           </a>
         </div>
 
