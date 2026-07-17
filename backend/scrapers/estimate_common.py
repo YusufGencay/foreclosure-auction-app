@@ -215,8 +215,14 @@ def fetch_page_text(url: str) -> Optional[str]:
             )
             time.sleep(RETRY_BACKOFF_SECONDS)
 
-    if last_text is None:
-        _record_diagnostic(url, f"EMPTY/NO RESPONSE after {RETRY_ATTEMPTS} attempts (no exception, no block text - page loaded but returned nothing)")
+    if last_text == "":
+        # 2026-07-17 bugfix: only overwrite the diagnostic with this generic
+        # message when the last attempt genuinely returned empty text with
+        # no exception (last_text == "", not None). If last_text is None,
+        # _fetch_page_text_once already recorded the real exception/launch-
+        # failure reason inside itself - overwriting it here would discard
+        # the one piece of information that explains what's actually wrong.
+        _record_diagnostic(url, f"EMPTY RESPONSE after {RETRY_ATTEMPTS} attempts (no exception, no block text - page loaded but body text was blank)")
     return None
 
 
@@ -355,8 +361,10 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
         return None
 
     status_seen = None
+    last_attempt_raised = False
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         _respect_rate_limit()
+        last_attempt_raised = False
         try:
             with sync_playwright() as p:
                 request_context = p.request.new_context(
@@ -369,8 +377,16 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
                 finally:
                     request_context.dispose()
         except Exception as exc:
+            # 2026-07-17 bugfix: this used to get silently overwritten by
+            # the generic "no exception" diagnostic below once the retry
+            # loop finished, even when every single attempt actually raised
+            # a real exception here - meaning the one piece of information
+            # that would explain the failure (a real Python exception
+            # message) was being discarded right before it reached anyone.
+            # last_attempt_raised prevents that overwrite.
             _record_diagnostic(url, f"{type(exc).__name__}: {exc} (attempt {attempt}/{RETRY_ATTEMPTS})")
             text = None
+            last_attempt_raised = True
 
         if text and text.strip():
             return text
@@ -383,11 +399,13 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
             )
             time.sleep(RETRY_BACKOFF_SECONDS)
 
-    _record_diagnostic(
-        url,
-        f"EMPTY/NO RESPONSE after {RETRY_ATTEMPTS} attempts "
-        f"(last HTTP status seen: {status_seen!r}, no exception on last attempt)",
-    )
+    if not last_attempt_raised:
+        _record_diagnostic(
+            url,
+            f"EMPTY/NO RESPONSE after {RETRY_ATTEMPTS} attempts "
+            f"(last HTTP status seen: {status_seen!r}, no exception on last attempt - "
+            f"request succeeded but body was empty)",
+        )
     return None
 
 
