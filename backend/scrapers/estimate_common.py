@@ -73,6 +73,31 @@ USER_AGENT = (
 
 _last_request_time: Optional[float] = None
 
+# 2026-07-17: every fetch failure up to now has been swallowed as a
+# logger.warning() that never surfaces anywhere in the API response - so
+# from production, a "bot block", a Chromium launch failure, a plain
+# network timeout, and DNS failure are all indistinguishable (they all just
+# show up as a null estimate with an empty enrich_errors list). That's not
+# good enough to actually diagnose what's failing. This module-level slot
+# records the real exception (type + message) from the most recent failed
+# fetch so callers (zillow_scraper.py etc., and ultimately main.py's
+# enrich_property) can surface the *actual* reason in enrich_errors instead
+# of a generic "unavailable". Never used to change behavior (still never
+# fabricates a number/URL) - purely diagnostic.
+_last_fetch_diagnostic: Optional[str] = None
+
+
+def get_last_fetch_diagnostic() -> Optional[str]:
+    """Real reason the most recent fetch_page_text/fetch_raw_response_text
+    call returned None, if any - see _last_fetch_diagnostic above."""
+    return _last_fetch_diagnostic
+
+
+def _record_diagnostic(url: str, detail: str) -> None:
+    global _last_fetch_diagnostic
+    _last_fetch_diagnostic = f"{url}: {detail}"
+    logger.warning("Fetch diagnostic for %s: %s", url, detail)
+
 
 def _respect_rate_limit():
     """Shared across zillow/realtor/redfin/market_conditions so a burst of
@@ -109,17 +134,22 @@ def _fetch_page_text_once(url: str) -> Optional[str]:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        logger.warning(
-            "playwright not installed / browser binaries not provisioned "
-            "(`pip install playwright && playwright install --with-deps "
-            "chromium`). Cannot fetch %s.",
-            url,
-        )
+        _record_diagnostic(url, "playwright not installed / browser binaries not provisioned")
         return None
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            try:
+                browser = p.chromium.launch(headless=True)
+            except Exception as launch_exc:
+                # Distinguished from a navigation/network failure below -
+                # if Chromium itself can't start (common Docker failure
+                # mode: sandbox permissions, /dev/shm too small), every
+                # single fetch would fail identically regardless of which
+                # site it's aimed at. Tagged explicitly so this is
+                # distinguishable from a genuine per-site block.
+                _record_diagnostic(url, f"BROWSER LAUNCH FAILED: {type(launch_exc).__name__}: {launch_exc}")
+                return None
             try:
                 page = browser.new_page(user_agent=USER_AGENT)
                 page.set_default_timeout(TIMEOUT_MS)
@@ -138,7 +168,7 @@ def _fetch_page_text_once(url: str) -> Optional[str]:
             finally:
                 browser.close()
     except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
+        _record_diagnostic(url, f"{type(exc).__name__}: {exc}")
         return None
 
     return text
@@ -170,11 +200,10 @@ def fetch_page_text(url: str) -> Optional[str]:
             return text
 
         if text and _looks_blocked(text):
-            logger.warning(
-                "Response from %s looks like a bot-block/CAPTCHA page "
-                "rather than real content; discarding rather than risking "
-                "a garbage parse (not retrying - block looks confirmed).",
+            _record_diagnostic(
                 url,
+                f"BOT-BLOCK TEXT DETECTED in response (len={len(text)}): "
+                f"{text[:200]!r}",
             )
             return None
 
@@ -187,7 +216,7 @@ def fetch_page_text(url: str) -> Optional[str]:
             time.sleep(RETRY_BACKOFF_SECONDS)
 
     if last_text is None:
-        logger.warning("fetch_page_text: no usable response from %s after %d attempt(s).", url, RETRY_ATTEMPTS)
+        _record_diagnostic(url, f"EMPTY/NO RESPONSE after {RETRY_ATTEMPTS} attempts (no exception, no block text - page loaded but returned nothing)")
     return None
 
 
@@ -322,13 +351,10 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        logger.warning(
-            "playwright not installed / browser binaries not provisioned. "
-            "Cannot fetch %s.",
-            url,
-        )
+        _record_diagnostic(url, "playwright not installed / browser binaries not provisioned")
         return None
 
+    status_seen = None
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         _respect_rate_limit()
         try:
@@ -338,11 +364,12 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
                 )
                 try:
                     response = request_context.get(url, timeout=TIMEOUT_MS)
+                    status_seen = response.status
                     text = response.text()
                 finally:
                     request_context.dispose()
         except Exception as exc:
-            logger.warning("Failed to fetch %s (attempt %d/%d): %s", url, attempt, RETRY_ATTEMPTS, exc)
+            _record_diagnostic(url, f"{type(exc).__name__}: {exc} (attempt {attempt}/{RETRY_ATTEMPTS})")
             text = None
 
         if text and text.strip():
@@ -356,7 +383,11 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
             )
             time.sleep(RETRY_BACKOFF_SECONDS)
 
-    logger.warning("fetch_raw_response_text: no usable response from %s after %d attempt(s).", url, RETRY_ATTEMPTS)
+    _record_diagnostic(
+        url,
+        f"EMPTY/NO RESPONSE after {RETRY_ATTEMPTS} attempts "
+        f"(last HTTP status seen: {status_seen!r}, no exception on last attempt)",
+    )
     return None
 
 
