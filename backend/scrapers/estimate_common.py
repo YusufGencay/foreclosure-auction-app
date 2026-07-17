@@ -353,11 +353,30 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
     behavior - a live production test showed this returning nothing for
     Redfin's autocomplete endpoint with no exception raised, consistent
     with a transient failure worth one retry.
+
+    2026-07-17 UPDATE (real root cause found, not guessed): added
+    diagnostic capture (get_last_fetch_diagnostic()) and ran a live
+    production /enrich call. Every single call through this function -
+    for all of Zillow, Realtor.com, Redfin, and Auction.com resolution -
+    failed identically: `TimeoutError: APIRequestContext.get: Timeout
+    30000ms exceeded`, on both retry attempts, every time. That's
+    Playwright's own bundled request context (`playwright.request`)
+    specifically hanging for the full 30s and never getting a response at
+    all - not a bot-block page, not a parse error, a dead connection.
+    Switched this function from Playwright's request context to the
+    plain `requests` library (already a dependency, unused for this call)
+    to test whether the hang is specific to Playwright's networking stack
+    (different TLS/HTTP fingerprint, DNS path, or connection handling than
+    a normal Python HTTP client) rather than a blanket block on Railway's
+    IP at the network layer. This does NOT reintroduce the JSON-viewer
+    interference bug documented above - that was about a browser PAGE
+    rendering a response, and `requests` never renders anything, exactly
+    like the request-context approach it replaces.
     """
     try:
-        from playwright.sync_api import sync_playwright
+        import requests
     except ImportError:
-        _record_diagnostic(url, "playwright not installed / browser binaries not provisioned")
+        _record_diagnostic(url, "requests library not installed")
         return None
 
     status_seen = None
@@ -366,16 +385,13 @@ def fetch_raw_response_text(url: str) -> Optional[str]:
         _respect_rate_limit()
         last_attempt_raised = False
         try:
-            with sync_playwright() as p:
-                request_context = p.request.new_context(
-                    user_agent=USER_AGENT, timeout=TIMEOUT_MS
-                )
-                try:
-                    response = request_context.get(url, timeout=TIMEOUT_MS)
-                    status_seen = response.status
-                    text = response.text()
-                finally:
-                    request_context.dispose()
+            response = requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=TIMEOUT_MS / 1000,
+            )
+            status_seen = response.status_code
+            text = response.text
         except Exception as exc:
             # 2026-07-17 bugfix: this used to get silently overwritten by
             # the generic "no exception" diagnostic below once the retry
