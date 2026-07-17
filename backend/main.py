@@ -34,6 +34,7 @@ from scrapers.grantstreet import GrantStreetScraper
 from scrapers.zillow_scraper import get_zillow_estimate
 from scrapers.realtor_scraper import get_realtor_estimate
 from scrapers.redfin_scraper import get_redfin_estimate
+from scrapers.estimate_common import get_last_fetch_diagnostic
 from scrapers.market_conditions import get_market_conditions_and_median_price
 from scrapers.crime_scraper import get_crime_grade
 from scrapers.flood_zone import get_flood_zone
@@ -634,6 +635,15 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
         zillow_result = get_zillow_estimate(prop.address)
         prop.zillow_estimate = zillow_result.get("estimate")
         prop.zillow_url = zillow_result.get("url")
+        if prop.zillow_url is None:
+            # 2026-07-17: surface the *real* reason the fetch came back
+            # empty (bot-block text, browser launch failure, timeout, HTTP
+            # status, etc.) instead of a silent null - see
+            # estimate_common.get_last_fetch_diagnostic(). Purely
+            # informational; never changes the never-fabricate behavior.
+            diag = get_last_fetch_diagnostic()
+            if diag:
+                errors.append(f"zillow_diag: {diag}")
     except Exception as exc:
         logger.exception("Zillow scraper failed for property %d", property_id)
         errors.append(f"zillow: {exc}")
@@ -642,6 +652,10 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
         realtor_result = get_realtor_estimate(prop.address)
         prop.realtor_estimate = realtor_result.get("estimate")
         prop.realtor_url = realtor_result.get("url")
+        if prop.realtor_url is None:
+            diag = get_last_fetch_diagnostic()
+            if diag:
+                errors.append(f"realtor_diag: {diag}")
     except Exception as exc:
         logger.exception("Realtor.com scraper failed for property %d", property_id)
         errors.append(f"realtor: {exc}")
@@ -650,6 +664,10 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
         redfin_result = get_redfin_estimate(prop.address)
         prop.redfin_estimate = redfin_result.get("estimate")
         prop.redfin_url = redfin_result.get("url")
+        if prop.redfin_url is None:
+            diag = get_last_fetch_diagnostic()
+            if diag:
+                errors.append(f"redfin_diag: {diag}")
     except Exception as exc:
         logger.exception("Redfin scraper failed for property %d", property_id)
         errors.append(f"redfin: {exc}")
@@ -721,6 +739,10 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
         if not prop.auction_com_url:
             auction_url = get_auction_com_url(prop.address)
             prop.auction_com_url = auction_url or AUCTION_COM_HOMEPAGE
+            if auction_url is None:
+                diag = get_last_fetch_diagnostic()
+                if diag:
+                    errors.append(f"auction_com_diag: {diag}")
     except Exception as exc:
         logger.exception("Federa/Auction.com link resolution failed for property %d", property_id)
         errors.append(f"federa_auction_links: {exc}")
