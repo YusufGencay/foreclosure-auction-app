@@ -595,7 +595,22 @@ def _extract_zip(address: Optional[str]) -> Optional[str]:
 
 
 @app.get("/api/properties/{property_id}/enrich")
-def enrich_property(property_id: int, db: Session = Depends(get_db)):
+def enrich_property(
+    property_id: int,
+    force: bool = Query(
+        False,
+        description=(
+            "Bypass the ENRICH_CACHE_HOURS cache and re-run every lookup now. "
+            "Added 2026-07-21: without this there is no way to re-test a "
+            "property after a scraper fix, because the first (failed) enrich "
+            "stamps estimates_last_updated and every later call is served "
+            "from cache with empty enrich_errors - which reads exactly like "
+            "'the scrapers ran and found nothing' and cost real debugging "
+            "time. Also lets the UI offer a manual refresh on a stale record."
+        ),
+    ),
+    db: Session = Depends(get_db),
+):
     """
     Calls the Zillow/Realtor.com/Redfin estimate scrapers and the market
     conditions lookup for this property, updates the Property record, and
@@ -615,7 +630,11 @@ def enrich_property(property_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Property not found")
 
     now = datetime.utcnow()
-    if prop.estimates_last_updated and (now - prop.estimates_last_updated) < timedelta(hours=ENRICH_CACHE_HOURS):
+    if (
+        not force
+        and prop.estimates_last_updated
+        and (now - prop.estimates_last_updated) < timedelta(hours=ENRICH_CACHE_HOURS)
+    ):
         logger.info(
             "Property %d estimates last updated %s (< %dh ago); returning cached values.",
             property_id, prop.estimates_last_updated, ENRICH_CACHE_HOURS,
