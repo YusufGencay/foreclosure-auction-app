@@ -1397,6 +1397,25 @@ def title_search(property_id: int, db: Session = Depends(get_db)):
     return title_search_provider(prop.address, prop.parcel_id)
 
 
+@app.get("/api/diagnostics/connectivity")
+def diagnostics_connectivity():
+    """
+    Report which external hosts this container can actually reach.
+
+    Added 2026-07-21 to settle an open question that had been guessed at
+    rather than measured: the 2026-07-17 session proved
+    html.duckduckgo.com is unreachable from Railway and concluded a PAID
+    search API or proxy was required. But only that one host was ever
+    tested. This probes free search alternatives AND the destination
+    listing sites directly, so the next fix is chosen from evidence
+    instead of assumption. See backend/diagnostics.py.
+
+    Read-only, no side effects, safe to call any time.
+    """
+    from diagnostics import run_connectivity_probe
+    return run_connectivity_probe()
+
+
 # ---------------------------------------------------------------------------
 # Serve the built frontend (production only).
 #
