@@ -226,6 +226,46 @@ def fetch_page_text(url: str) -> Optional[str]:
     return None
 
 
+def normalize_address(address: str) -> str:
+    """
+    Clean a county-scraped address into something a consumer real-estate
+    site's search box will actually accept.
+
+    WHY (2026-07-21, from real production data): the RealAuction county
+    listings store addresses in their own shouty, half-punctuated format,
+    e.g. the real stored value for property 77:
+
+        "10406 CANARY ISLE DR TAMPA, FL- 33647"
+
+    Note the "FL-" - a stray hyphen where the state abbreviation should
+    end, present on the majority of scraped rows across counties. A live
+    production test confirmed Redfin's own search box does NOT resolve that
+    string to a listing (it stayed on the homepage rather than navigating
+    to a detail page), while the same property is perfectly findable when
+    the address is written normally. Feeding raw scraper output straight
+    into a third-party search box was silently costing us every match.
+
+    This only fixes formatting - it never invents, completes, or corrects
+    any part of an address (no guessing a missing city, no "correcting" a
+    street name). If a piece of the address isn't in the input, it isn't in
+    the output either.
+    """
+    if not address:
+        return ""
+
+    cleaned = address.strip()
+    # "FL- 33647" / "FL-33647" -> "FL 33647". Also handles other state
+    # abbreviations in case counties outside FL are ever configured.
+    cleaned = re.sub(r"\b([A-Z]{2})-\s*(?=\d{5})", r"\1 ", cleaned)
+    # A trailing bare hyphen after the state with no zip following.
+    cleaned = re.sub(r"\b([A-Z]{2})-(?=\s|$)", r"\1", cleaned)
+    # Collapse runs of whitespace introduced by the substitutions above.
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    # Tidy spacing around commas: "TAMPA ,FL" -> "TAMPA, FL".
+    cleaned = re.sub(r"\s*,\s*", ", ", cleaned)
+    return cleaned.strip().strip(",").strip()
+
+
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/?q={query}"
 
 

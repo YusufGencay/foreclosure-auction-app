@@ -38,6 +38,7 @@ from scrapers.estimate_common import (
     extract_dollar_amount_near_label,
     fetch_page_text,
     fetch_raw_response_text,
+    normalize_address,
 )
 
 logger = logging.getLogger("scrapers.redfin")
@@ -118,7 +119,13 @@ def _resolve_via_site_search(address: str) -> str | None:
         _record_diagnostic(REDFIN_HOMEPAGE, "playwright not installed")
         return None
 
-    house_number_match = re.match(r"\s*(\d+)", address.strip())
+    # County scraper output is not directly searchable ("... TAMPA, FL- 33647")
+    # - see normalize_address's docstring for the live evidence.
+    search_term = normalize_address(address)
+    if not search_term:
+        return None
+
+    house_number_match = re.match(r"\s*(\d+)", search_term)
     house_number = house_number_match.group(1) if house_number_match else None
 
     try:
@@ -166,39 +173,49 @@ def _resolve_via_site_search(address: str) -> str | None:
                     return None
 
                 search_box.click()
-                search_box.fill(address.strip())
+                search_box.fill(search_term)
                 # Redfin's autocomplete fires as you type; give it time to
                 # populate before committing to a selection.
                 page.wait_for_timeout(3000)
 
-                submitted = False
-                if house_number:
-                    # Prefer clicking the suggestion whose text actually
-                    # contains this property's house number - never accept
-                    # a nearby-but-different address (the exact accuracy
-                    # bug fixed in estimate_common on 2026-07-16).
-                    try:
-                        suggestion = page.locator(
-                            f'[data-rf-test-name="search-autocomplete-item"]:has-text("{house_number}")'
-                        ).first
-                        if suggestion.count() == 0:
-                            suggestion = page.locator(
-                                f'li:has-text("{house_number}"), '
-                                f'div[role="option"]:has-text("{house_number}")'
-                            ).first
-                        if suggestion.count() > 0:
-                            suggestion.click()
-                            submitted = True
-                    except Exception:
-                        submitted = False
+                # Select the first autocomplete suggestion via the keyboard
+                # rather than by CSS selector.
+                #
+                # WHY (2026-07-21): the first version of this function tried
+                # to click a suggestion matched by selectors like
+                # [data-rf-test-name="search-autocomplete-item"]. A live
+                # production run showed it silently matching nothing and
+                # falling through to a bare Enter press, which left the
+                # browser sitting on the homepage - the exact failure the
+                # diagnostic reported ("did not land on a /home/ detail
+                # page (ended at 'https://www.redfin.com/')"). Guessing a
+                # third-party site's internal CSS/test attributes is
+                # inherently brittle; ArrowDown+Enter is how a keyboard user
+                # picks the top suggestion and doesn't depend on Redfin's
+                # markup at all.
+                #
+                # Picking the FIRST suggestion is safe here only because the
+                # house-number check on the resulting URL below rejects a
+                # wrong-property match outright rather than returning it.
+                page.keyboard.press("ArrowDown")
+                page.wait_for_timeout(400)
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(4500)
 
-                if not submitted:
-                    # Fall back to submitting the typed query. Redfin routes
-                    # an exact-address query straight to its detail page.
-                    search_box.press("Enter")
-
-                page.wait_for_timeout(4000)
                 url = page.url
+                if "/home/" not in (url or ""):
+                    # Some queries land on a search-results page instead of
+                    # a detail page. If exactly one real listing card is
+                    # present, follow it; otherwise give up rather than
+                    # picking arbitrarily among several properties.
+                    try:
+                        links = page.locator('a[href*="/home/"]')
+                        if links.count() > 0:
+                            href = links.first.get_attribute("href")
+                            if href:
+                                url = href if href.startswith("http") else "https://www.redfin.com" + href
+                    except Exception:
+                        pass
             finally:
                 browser.close()
     except Exception as exc:
