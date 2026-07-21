@@ -154,8 +154,28 @@ def _resolve_via_site_search(address: str) -> str | None:
                 # other control on the page and silently swallowed the
                 # typed address (see the fill-verification block below), so
                 # it is now the LAST resort rather than the first choice.
+                # IMPORTANT (2026-07-21, confirmed by inspecting the live
+                # redfin.com DOM in a real browser): redfin.com renders TWO
+                # visible inputs that share the SAME id and name -
+                # id="search-box-input" name="searchInputBox" - one being
+                # the main hero search box (placeholder "City, Address,
+                # School, Agent, ZIP") and one a duplicate with an empty
+                # placeholder. Selecting `.first` is therefore ambiguous and
+                # was resolving to the wrong element: the address got typed
+                # into one box while the autocomplete/Enter handling
+                # belonged to the other, so Redfin navigated to its own
+                # default suggestion. That is the precise mechanism behind
+                # the observed "Tampa address resolved to a Chicago condo"
+                # failure.
+                #
+                # Requiring a non-empty placeholder disambiguates to the
+                # real search box. The [placeholder] variants are tried
+                # first for exactly this reason - do not reorder them above
+                # the bare name/id selectors.
                 search_box = None
                 for locator in (
+                    page.locator('input[name="searchInputBox"][placeholder]:not([placeholder=""])').first,
+                    page.locator('#search-box-input[placeholder]:not([placeholder=""])').first,
                     page.locator('input[name="searchInputBox"]').first,
                     page.locator('#search-box-input').first,
                     page.locator('input[data-rf-test-name="search-box-input"]').first,
