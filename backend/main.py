@@ -752,10 +752,31 @@ def enrich_property(
         # Phase 3 (2026-07-15): branded link-out buttons - only re-resolved
         # if we don't already have a real listing URL (like zillow_url,
         # the listing itself doesn't change once found).
-        if not prop.federa_url:
+        # 2026-07-21 BUGFIX - this was a permanent lock-out, not a cache.
+        #
+        # The guard used to be `if not prop.federa_url:`, but the failure
+        # path assigns `prop.federa_url = federa_url or FEDERA_HOMEPAGE` -
+        # i.e. on failure it stores the HOMEPAGE, which is a non-empty
+        # string and therefore truthy. So after the very first failed
+        # resolution, `not prop.federa_url` was False forever and this
+        # property was never retried again - not by a later /enrich, not by
+        # the 30-minute enrich_sweep, not even after the resolver itself was
+        # fixed. Every property that failed once was frozen at the bare
+        # homepage link permanently, which is exactly what the user was
+        # seeing ("Search Federa" on every property).
+        #
+        # Treating the homepage sentinel as "not resolved yet" makes these
+        # self-heal on the next enrich sweep. Real resolved URLs
+        # (federa.com/property/<id>, auction.com/details/...) are still
+        # never re-fetched, so this stays cheap.
+        if not prop.federa_url or prop.federa_url == FEDERA_HOMEPAGE:
             federa_url = get_federa_url(prop.address)
             prop.federa_url = federa_url or FEDERA_HOMEPAGE
-        if not prop.auction_com_url:
+            if federa_url is None:
+                diag = get_last_fetch_diagnostic()
+                if diag:
+                    errors.append(f"federa_diag: {diag}")
+        if not prop.auction_com_url or prop.auction_com_url == AUCTION_COM_HOMEPAGE:
             auction_url = get_auction_com_url(prop.address)
             prop.auction_com_url = auction_url or AUCTION_COM_HOMEPAGE
             if auction_url is None:
