@@ -86,6 +86,21 @@ PROBE_TARGETS = [
     ("ecosia", "https://www.ecosia.org/search?q=test", "search"),
     ("searx.be", "https://searx.be/search?q=test", "search"),
 
+    # Resolution-level probes: not just "is the host up" but "does the
+    # exact URL our resolver actually calls return usable data". The
+    # 2026-07-21 sweep showed redfin.com itself answers HTTP 200 while
+    # Redfin resolution still fails in /enrich - meaning the failure is
+    # somewhere more specific than host reachability, and probing the
+    # homepage alone can't tell us where. Uses a real, known-good address
+    # (verified live 2026-07-05, see redfin_scraper.py's docstring).
+    ("redfin autocomplete API",
+     "https://www.redfin.com/stingray/do/location-autocomplete"
+     "?location=17915%20Saint%20Croix%20Isle%20Dr%2C%20Tampa%2C%20FL%2033647&v=2",
+     "resolution"),
+    ("redfin known listing page",
+     "https://www.redfin.com/FL/Tampa/17915-Saint-Croix-Isle-Dr-33647/home/47184630",
+     "resolution"),
+
     ("zillow", "https://www.zillow.com/", "destination"),
     ("redfin", "https://www.redfin.com/", "destination"),
     ("realtor.com", "https://www.realtor.com/", "destination"),
@@ -208,6 +223,7 @@ def run_connectivity_probe() -> dict:
     controls_ok = [r for r in results if r.get("category") == "control" and _ok(r)]
     usable_search = [r["target"] for r in results if r.get("category") == "search" and _ok(r)]
     usable_dest = [r["target"] for r in results if r.get("category") == "destination" and _ok(r)]
+    usable_resolution = [r["target"] for r in results if r.get("category") == "resolution" and _ok(r)]
 
     if not controls_ok:
         summary = (
@@ -220,7 +236,8 @@ def run_connectivity_probe() -> dict:
         summary = (
             f"Controls OK. Usable free search hosts: "
             f"{usable_search or 'NONE'}. Directly reachable destination sites: "
-            f"{usable_dest or 'NONE'}."
+            f"{usable_dest or 'NONE'}. Working resolution URLs: "
+            f"{usable_resolution or 'NONE'}."
         )
 
     return {
@@ -229,5 +246,6 @@ def run_connectivity_probe() -> dict:
         "summary": summary,
         "usable_search_hosts": usable_search,
         "reachable_destination_sites": usable_dest,
+        "working_resolution_urls": usable_resolution,
         "results": results,
     }
