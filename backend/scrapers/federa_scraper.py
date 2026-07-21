@@ -248,8 +248,16 @@ def get_federa_url(address: str) -> Optional[str]:
                 page.wait_for_timeout(3000)
 
                 # Live DOM structure (verified 2026-07-21):
-                #   div > ul.divide-y > li > button > span("<full address>")
-                options = page.locator("ul li button")
+                #   div.py-2 > ul.divide-y.divide-muted > li > button > span
+                #
+                # The class filter is REQUIRED, not cosmetic. A bare
+                # "ul li button" selector also matches Federa's mobile nav
+                # bar (ul.flex.items-stretch.justify-around), which yields
+                # the literal items ["Explore", "Assistant", "Menu"] - those
+                # would then be fed in as address suggestions. Confirmed
+                # live: with an empty search box, "ul li button" returns
+                # exactly those three nav entries and nothing else.
+                options = page.locator("ul.divide-y li button")
                 count = options.count()
                 if count == 0:
                     _record_diagnostic(
