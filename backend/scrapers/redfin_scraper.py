@@ -149,16 +149,24 @@ def _resolve_via_site_search(address: str) -> str | None:
                 # shorter variants since). Try a few stable-ish handles in
                 # order rather than pinning to one exact string, so a copy
                 # tweak degrades to "no result" rather than a hard break.
+                # Ordered most-specific-first. The generic get_by_role
+                # ("combobox") that used to lead this list matched some
+                # other control on the page and silently swallowed the
+                # typed address (see the fill-verification block below), so
+                # it is now the LAST resort rather than the first choice.
                 search_box = None
                 for locator in (
-                    page.get_by_role("combobox").first,
                     page.locator('input[name="searchInputBox"]').first,
-                    page.locator('input[type="search"]').first,
+                    page.locator('#search-box-input').first,
+                    page.locator('input[data-rf-test-name="search-box-input"]').first,
                     page.locator('input[placeholder*="Address" i]').first,
                     page.locator('input[placeholder*="City" i]').first,
+                    page.locator('input[placeholder*="ZIP" i]').first,
+                    page.locator('input[type="search"]').first,
+                    page.get_by_role("combobox").first,
                 ):
                     try:
-                        if locator.count() > 0:
+                        if locator.count() > 0 and locator.is_visible():
                             search_box = locator
                             break
                     except Exception:
@@ -174,6 +182,43 @@ def _resolve_via_site_search(address: str) -> str | None:
 
                 search_box.click()
                 search_box.fill(search_term)
+
+                # Verify the text actually landed in the box before acting
+                # on any suggestion.
+                #
+                # WHY (2026-07-21, live production evidence): the previous
+                # revision typed the address, blindly pressed ArrowDown +
+                # Enter, and Redfin navigated to
+                # /IL/Chicago/6526-S-Kimbark-Ave-60637/... for a query of
+                # "10406 CANARY ISLE DR TAMPA, FL 33647". A Chicago condo is
+                # not a near-miss for a Tampa address - it's Redfin's own
+                # default/promoted suggestion, which is what the dropdown
+                # offers when it has received no query text. In other words
+                # the fill() silently went to the wrong element (the first
+                # matching "combobox" on the page is not necessarily the
+                # property search box) and we then confidently selected
+                # whatever happened to be first.
+                #
+                # Only the house-number guard on the final URL stopped that
+                # from being shown to the investor as their property's
+                # comp. Checking the input's own value here catches the
+                # failure at its source instead of relying on that last
+                # line of defense.
+                try:
+                    typed = (search_box.input_value() or "").strip()
+                except Exception:
+                    typed = ""
+                if house_number and house_number not in typed:
+                    _record_diagnostic(
+                        REDFIN_HOMEPAGE,
+                        f"Search box did not accept the query (expected it to "
+                        f"contain {house_number!r}, box contains {typed[:80]!r}) - "
+                        f"the located input is probably not Redfin's property "
+                        f"search field. Refusing to select a suggestion, since "
+                        f"an empty query yields unrelated default results.",
+                    )
+                    return None
+
                 # Redfin's autocomplete fires as you type; give it time to
                 # populate before committing to a selection.
                 page.wait_for_timeout(3000)
